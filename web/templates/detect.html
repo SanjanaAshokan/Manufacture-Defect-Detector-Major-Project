@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Detect Defects — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="detect-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Analyze</span>
+            <h1 class="section-title">Defect Detection</h1>
+            <p class="section-subtitle">Upload a transistor image to receive an AI-powered defect classification with Grad-CAM heatmap explanation.</p>
+        </div>
+
+        <div class="detect-layout">
+            <!-- Upload Panel -->
+            <div class="detect-panel glass-card animate-fade-up" id="uploadPanel">
+                <h3 class="panel-title">Upload Image</h3>
+
+                <!-- Model & Threshold Controls -->
+                <div class="detect-controls">
+                    <div class="control-group">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect" class="form-select">
+                            <option value="efficientnet_b0" selected>EfficientNet-B0 (Faster)</option>
+                            <option value="resnet50">ResNet-50 (Heavier)</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.50</span></label>
+                        <input type="range" id="thresholdSlider" min="0.1" max="0.99" step="0.01" value="0.50" class="form-range">
+                    </div>
+                </div>
+
+                {% if not model_status.trained %}
+                <div class="detect-status-banner" id="modelStatusNote">
+                    <span>⚠</span>
+                    <span>This architecture has no trained checkpoint — results below will use raw, untrained weights and won't reflect real defect-detection accuracy.</span>
+                </div>
+                {% endif %}
+
+                <!-- Drag & Drop Upload Zone -->
+                <div class="upload-zone" id="uploadZone">
+                    <div class="upload-zone-content" id="uploadContent">
+                        <div class="upload-icon">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        </div>
+                        <p class="upload-text">Drag &amp; drop an image here</p>
+                        <p class="upload-subtext">or click to browse (PNG, JPG, BMP — max 16 MB)</p>
+                    </div>
+                    <div class="upload-preview" id="uploadPreview" style="display:none;">
+                        <img id="previewImage" src="" alt="Preview">
+                        <button class="btn btn-ghost btn-sm" id="clearImage" type="button">✕ Clear</button>
+                    </div>
+                    <input type="file" id="fileInput" accept="image/png,image/jpeg,image/bmp,image/tiff" style="display:none;">
+                </div>
+
+                <!-- Analyze Button -->
+                <button class="btn btn-primary btn-lg btn-block" id="analyzeBtn" disabled>
+                    <span class="btn-text">Analyze Image</span>
+                    <span class="btn-loader" style="display:none;">
+                        <span class="spinner"></span> Analyzing...
+                    </span>
+                </button>
+
+                <!-- Example Images -->
+                {% if examples %}
+                <div class="examples-section">
+                    <p class="examples-label">Or try an example:</p>
+                    <div class="examples-grid">
+                        {% for example in examples %}
+                        <button class="example-thumb" data-src="/examples/{{ example }}" title="{{ example }}">
+                            <img src="/examples/{{ example }}" alt="{{ example }}" loading="lazy">
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Results Panel -->
+            <div class="results-panel glass-card animate-fade-up delay-100" id="resultsPanel">
+                <h3 class="panel-title">Analysis Results</h3>
+
+                <!-- Empty State -->
+                <div class="results-empty" id="resultsEmpty">
+                    <div class="empty-icon">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                    </div>
+                    <p>Upload an image to see the analysis results here.</p>
+                </div>
+
+                <!-- Loading State -->
+                <div class="results-loading" id="resultsLoading" style="display:none;">
+                    <div class="loading-animation">
+                        <div class="loading-ring"></div>
+                        <div class="loading-ring delay-200"></div>
+                        <div class="loading-ring delay-400"></div>
+                    </div>
+                    <p>Running inference &amp; generating Grad-CAM...</p>
+                </div>
+
+                <!-- Results Content -->
+                <div class="results-content" id="resultsContent" style="display:none;">
+                    <!-- Prediction Badge -->
+                    <div class="prediction-badge" id="predictionBadge">
+                        <span class="prediction-icon" id="predictionIcon">✓</span>
+                        <span class="prediction-label" id="predictionLabel">Good</span>
+                    </div>
+
+                    <!-- Uncertain-prediction flag (near the decision threshold) -->
+                    <div class="uncertain-badge" id="uncertainBadge" style="display:none;">
+                        ⚠ Low margin — this prediction is close to the decision threshold and may not be reliable. Consider manual review.
+                    </div>
+
+                    <!-- Confidence Bar -->
+                    <div class="confidence-section">
+                        <div class="confidence-header">
+                            <span>Confidence</span>
+                            <span class="confidence-value" id="confidenceValue">0%</span>
+                        </div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" id="confidenceFill" style="width:0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Probability Bars -->
+                    <div class="probability-section">
+                        <div class="prob-row">
+                            <span class="prob-label">Good</span>
+                            <div class="prob-bar">
+                                <div class="prob-fill prob-fill-good" id="probGood" style="width:0%"></div>
+                            </div>
+                            <span class="prob-value" id="probGoodValue">0%</span>
+                        </div>
+                        <div class="prob-row">
+                            <span class="prob-label">Defective</span>
+                            <div class="prob-bar">
+                                <div class="prob-fill prob-fill-defective" id="probDefective" style="width:0%"></div>
+                            </div>
+                            <span class="prob-value" id="probDefectiveValue">0%</span>
+                        </div>
+                    </div>
+
+                    <!-- Grad-CAM Images -->
+                    <div class="gradcam-section">
+                        <div class="gradcam-tabs">
+                            <button class="gradcam-tab active" data-tab="overlay" id="tabOverlay">Overlay</button>
+                            <button class="gradcam-tab" data-tab="heatmap" id="tabHeatmap">Heatmap</button>
+                            <button class="gradcam-tab" data-tab="original" id="tabOriginal">Original</button>
+                        </div>
+                        <div class="gradcam-display">
+                            <img id="gradcamImage" src="" alt="Grad-CAM Visualization" class="gradcam-img">
+                        </div>
+                        <p class="gradcam-caption">Grad-CAM highlights the regions most influential in the model's decision.</p>
+                    </div>
+
+                    <!-- Meta Info -->
+                    <div class="result-meta">
+                        <span class="meta-item" id="metaModel">Model: —</span>
+                        <span class="meta-item" id="metaThreshold">Threshold: —</span>
+                        <span class="meta-item" id="metaCalibrated" style="display:none;">Calibrated confidence</span>
+                    </div>
+
+                    <!-- Analyze Another -->
+                    <button class="btn btn-ghost btn-block" id="analyzeAnotherBtn" type="button">
+                        ↩ Analyze Another Image
+                    </button>
+                </div>
+
+                <!-- Error State -->
+                <div class="results-error" id="resultsError" style="display:none;">
+                    <div class="error-icon">⚠</div>
+                    <p class="error-message" id="errorMessage">An error occurred.</p>
+                    <button class="btn btn-ghost btn-sm" id="retryBtn" type="button">Retry</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}

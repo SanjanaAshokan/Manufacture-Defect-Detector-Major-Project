@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="dashboard-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Performance</span>
+            <h1 class="section-title">Model Dashboard</h1>
+            <p class="section-subtitle">Comprehensive evaluation metrics, visualizations, and threshold analysis for production deployment.</p>
+        </div>
+
+        {% if results %}
+        {% if results.evaluated_at %}
+        <p class="eval-timestamp animate-fade-up">
+            Last evaluated {{ results.evaluated_at.split('T')[0] }} · {{ results.num_test_samples }} test images
+            {% if model_status and not model_status.trained %} · ⚠ no checkpoint currently loaded for live predictions{% endif %}
+        </p>
+        {% endif %}
+        <!-- Metrics Cards -->
+        <div class="metrics-grid animate-fade-up">
+            <div class="metric-card glass-card">
+                <div class="metric-circle metric-circle-blue">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.accuracy * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    </svg>
+                    <span class="metric-value">{{ (results.metrics.accuracy * 100)|round(1) }}%</span>
+                </div>
+                <h3>Accuracy</h3>
+                <p>Overall correct predictions</p>
+            </div>
+            <div class="metric-card glass-card">
+                <div class="metric-circle metric-circle-purple">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.precision * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    </svg>
+                    <span class="metric-value">{{ (results.metrics.precision * 100)|round(1) }}%</span>
+                </div>
+                <h3>Precision</h3>
+                <p>True positives / all positives</p>
+            </div>
+            <div class="metric-card glass-card">
+                <div class="metric-circle metric-circle-cyan">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.recall * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    </svg>
+                    <span class="metric-value">{{ (results.metrics.recall * 100)|round(1) }}%</span>
+                </div>
+                <h3>Recall</h3>
+                <p>Defects correctly identified</p>
+            </div>
+            <div class="metric-card glass-card">
+                <div class="metric-circle metric-circle-green">
+                    <svg viewBox="0 0 36 36" class="circular-chart">
+                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.f1_score * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+                    </svg>
+                    <span class="metric-value">{{ (results.metrics.f1_score * 100)|round(1) }}%</span>
+                </div>
+                <h3>F1-Score</h3>
+                <p>Harmonic mean of P &amp; R</p>
+            </div>
+        </div>
+
+        <!-- Charts Grid -->
+        <div class="charts-grid animate-fade-up">
+            {% if plots.get('confusion_matrix') %}
+            <div class="chart-card glass-card">
+                <h3>Confusion Matrix</h3>
+                <img src="/plots/confusion_matrix.png" alt="Confusion Matrix" class="chart-image" loading="lazy">
+            </div>
+            {% endif %}
+            {% if plots.get('pr_curve') %}
+            <div class="chart-card glass-card">
+                <h3>Precision-Recall Curve</h3>
+                <img src="/plots/pr_curve.png" alt="Precision-Recall Curve" class="chart-image" loading="lazy">
+            </div>
+            {% endif %}
+            {% if plots.get('roc_curve') %}
+            <div class="chart-card glass-card">
+                <h3>ROC Curve</h3>
+                <img src="/plots/roc_curve.png" alt="ROC Curve" class="chart-image" loading="lazy">
+            </div>
+            {% endif %}
+            {% if plots.get('training_history') %}
+            <div class="chart-card glass-card">
+                <h3>Training History</h3>
+                <img src="/plots/training_history.png" alt="Training History" class="chart-image" loading="lazy">
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Threshold Analysis -->
+        {% if results.threshold_analysis %}
+        <div class="threshold-section glass-card animate-fade-up">
+            <h3>Production Threshold Analysis</h3>
+            <p class="threshold-desc">Adjust the confidence threshold to balance precision and recall for your production line requirements.</p>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Threshold</th>
+                            <th>Precision</th>
+                            <th>Recall</th>
+                            <th>F1-Score</th>
+                            <th>Accuracy</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in results.threshold_analysis %}
+                        <tr class="{% if row.threshold == 0.5 %}row-highlight{% endif %}">
+                            <td><span class="threshold-badge">{{ row.threshold }}</span></td>
+                            <td>{{ (row.precision * 100)|round(1) }}%</td>
+                            <td>{{ (row.recall * 100)|round(1) }}%</td>
+                            <td>{{ (row.f1_score * 100)|round(1) }}%</td>
+                            <td>{{ (row.accuracy * 100)|round(1) }}%</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <p class="threshold-note">
+                💡 <strong>Tip:</strong> Lower thresholds catch more defects (higher recall) but may flag good products. 
+                Higher thresholds reduce false alarms but may miss subtle defects.
+            </p>
+        </div>
+        {% endif %}
+
+        <!-- Per-Defect-Type Breakdown -->
+        {% if results.defect_type_breakdown %}
+        <div class="breakdown-section glass-card animate-fade-up">
+            <h3>Recall by Defect Type</h3>
+            <p class="threshold-desc">Overall recall can hide a defect type the model rarely catches — this breaks it down per type on the test set.</p>
+            <div class="breakdown-grid">
+                {% for dtype, stats in results.defect_type_breakdown.items()|sort %}
+                <div class="breakdown-card">
+                    <h4>{{ dtype.replace('_', ' ') }}</h4>
+                    <div class="breakdown-value">{{ (stats.recall * 100)|round(1) }}%</div>
+                    <div class="breakdown-support">{{ stats.correct }}/{{ stats.support }} caught</div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Confidence Calibration -->
+        {% if results.calibration %}
+        <div class="calibration-note animate-fade-up">
+            <strong>Confidence calibration (ECE):</strong> {{ results.calibration.ece }}
+            {% if results.calibration.ece > 0.1 %}
+            — confidence values are likely overstated; run <code>python src/calibrate.py</code> to correct them.
+            {% else %}
+            — the displayed confidence percentages are reasonably well-calibrated.
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% else %}
+        <!-- No Results State -->
+        <div class="empty-dashboard glass-card animate-fade-up">
+            <div class="empty-icon-large">📊</div>
+            <h3>No Evaluation Results Yet</h3>
+            <p>Train a model and run evaluation to see performance metrics here.</p>
+            <div class="empty-commands">
+                <div class="command-block">
+                    <code>python src/train.py</code>
+                    <span>Train the model</span>
+                </div>
+                <div class="command-block">
+                    <code>python src/evaluate.py --generate-gradcam</code>
+                    <span>Run evaluation</span>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

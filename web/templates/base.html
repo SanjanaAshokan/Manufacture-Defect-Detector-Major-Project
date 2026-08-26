@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-powered transistor manufacturing defect detection using deep learning and Grad-CAM explainability.">
+    <meta name="keywords" content="defect detection, manufacturing, AI, deep learning, Grad-CAM, transistor, quality control">
+    <meta property="og:title" content="Transistor Defect Detector">
+    <meta property="og:description" content="Detect manufacturing defects in transistors using fine-tuned EfficientNet/ResNet with Grad-CAM visual explanations.">
+    <meta property="og:type" content="website">
+    <title>{% block title %}Transistor Defect Detector{% endblock %}</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar" id="navbar">
+        <div class="container nav-container">
+            <a href="/" class="nav-logo">
+                <span class="logo-icon">🔬</span>
+                <span class="logo-text">DefectAI</span>
+            </a>
+            <button class="nav-toggle" id="navToggle" aria-label="Toggle navigation">
+                <span></span><span></span><span></span>
+            </button>
+            <ul class="nav-links" id="navLinks">
+                <li><a href="/" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Home</a></li>
+                <li><a href="/detect" class="nav-link {% if request.endpoint == 'detect' %}active{% endif %}">Detect</a></li>
+                <li><a href="/dashboard" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+                <li><a href="/about" class="nav-link {% if request.endpoint == 'about' %}active{% endif %}">About</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        {% if not site_model_trained %}
+        <div class="model-status-banner" role="status">
+            <div class="container model-status-banner-inner">
+                <span class="model-status-icon">⚠</span>
+                <span>
+                    <strong>Demo mode:</strong> no trained checkpoint is loaded for
+                    <code>{{ site_default_architecture }}</code>. Predictions and any
+                    metrics shown site-wide are placeholders, not a validated model —
+                    see <a href="/dashboard">Dashboard</a> for details.
+                </span>
+            </div>
+        </div>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <span class="logo-icon">🔬</span>
+                    <span class="logo-text">DefectAI</span>
+                    <p class="footer-tagline">AI-Powered Manufacturing Quality Control</p>
+                </div>
+                <div class="footer-links">
+                    <div class="footer-col">
+                        <h4>Product</h4>
+                        <a href="/detect">Detect Defects</a>
+                        <a href="/dashboard">View Metrics</a>
+                        <a href="/about">Learn More</a>
+                    </div>
+                    <div class="footer-col">
+                        <h4>Technology</h4>
+                        <a href="/about#models">EfficientNet-B0</a>
+                        <a href="/about#gradcam">Grad-CAM</a>
+                        <a href="/about#dataset">MVTec AD</a>
+                    </div>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2025 Transistor Defect Detector. Built with PyTorch &amp; Flask.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

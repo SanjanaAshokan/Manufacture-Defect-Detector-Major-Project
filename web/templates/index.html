@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Transistor Defect Detector — AI-Powered Quality Control{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero" id="hero">
+    <div class="hero-bg-effects">
+        <div class="hero-orb hero-orb-1"></div>
+        <div class="hero-orb hero-orb-2"></div>
+        <div class="hero-orb hero-orb-3"></div>
+        <div class="hero-grid"></div>
+    </div>
+    <div class="container hero-container">
+        <div class="hero-content animate-fade-up">
+            <div class="hero-badge">
+                <span class="badge-dot"></span>
+                Powered by Deep Learning &amp; Grad-CAM
+            </div>
+            <h1 class="hero-title">
+                Detect Manufacturing
+                <span class="gradient-text">Defects Instantly</span>
+            </h1>
+            <p class="hero-subtitle">
+                AI-powered transistor quality inspection using fine-tuned EfficientNet-B0 &amp; ResNet-50. 
+                Upload an image and receive instant defect classification with visual heatmap explanations.
+            </p>
+            <div class="hero-actions">
+                <a href="/detect" class="btn btn-primary btn-lg" id="heroDetectBtn">
+                    <span>Start Detecting</span>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                </a>
+                <a href="/about" class="btn btn-ghost btn-lg" id="heroLearnBtn">
+                    Learn More
+                </a>
+            </div>
+        </div>
+        <div class="hero-visual animate-fade-up delay-200">
+            <div class="hero-card glass-card">
+                <div class="hero-card-header">
+                    <div class="card-dots">
+                        <span class="dot dot-red"></span>
+                        <span class="dot dot-yellow"></span>
+                        <span class="dot dot-green"></span>
+                    </div>
+                    <span class="card-label">defect_analysis.py</span>
+                </div>
+                <div class="hero-card-body">
+                    <div class="code-line"><span class="code-keyword">import</span> <span class="code-module">torch</span></div>
+                    <div class="code-line"><span class="code-keyword">from</span> <span class="code-module">gradcam</span> <span class="code-keyword">import</span> <span class="code-func">GradCAM</span></div>
+                    <div class="code-line">&nbsp;</div>
+                    <div class="code-line"><span class="code-comment"># Load fine-tuned model</span></div>
+                    <div class="code-line">model = <span class="code-func">load_model</span>(<span class="code-string">"efficientnet_b0"</span>)</div>
+                    <div class="code-line">result = <span class="code-func">predict</span>(image)</div>
+                    <div class="code-line">&nbsp;</div>
+                    <div class="code-line"><span class="code-comment"># → Defective (96.4% confidence)</span></div>
+                    <div class="code-line"><span class="code-comment"># → Grad-CAM: bent_lead region</span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section class="features" id="features">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Capabilities</span>
+            <h2 class="section-title">Intelligent Defect Detection</h2>
+            <p class="section-subtitle">Combining state-of-the-art deep learning with explainable AI for reliable quality inspection.</p>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card glass-card animate-fade-up">
+                <div class="feature-icon feature-icon-blue">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="m11 8v6M8 11h6"/></svg>
+                </div>
+                <h3>AI-Powered Detection</h3>
+                <p>Fine-tuned EfficientNet-B0 and ResNet-50 models classify transistor images across 4 defect categories{% if results %}, currently measuring {{ (results.metrics.accuracy * 100)|round(1) }}% accuracy on the held-out test set{% endif %}.</p>
+            </div>
+            <div class="feature-card glass-card animate-fade-up delay-100">
+                <div class="feature-icon feature-icon-purple">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                </div>
+                <h3>Grad-CAM Explainability</h3>
+                <p>Visual heatmaps highlight exactly which regions of the transistor image triggered the defect detection, building trust and enabling root-cause analysis.</p>
+            </div>
+            <div class="feature-card glass-card animate-fade-up delay-200">
+                <div class="feature-icon feature-icon-cyan">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                </div>
+                <h3>Production Ready</h3>
+                <p>Configurable confidence thresholds, precision-recall analysis, and cloud deployment via Docker ensure real-world manufacturing applicability.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- How It Works -->
+<section class="how-it-works" id="how-it-works">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Process</span>
+            <h2 class="section-title">How It Works</h2>
+        </div>
+        <div class="steps-grid">
+            <div class="step-card animate-fade-up">
+                <div class="step-number">01</div>
+                <div class="step-icon">📤</div>
+                <h3>Upload Image</h3>
+                <p>Drag and drop or select a transistor image from your production line.</p>
+            </div>
+            <div class="step-connector animate-fade-up delay-100">
+                <svg width="40" height="24" viewBox="0 0 40 24"><path d="M0 12h36M28 4l8 8-8 8" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            </div>
+            <div class="step-card animate-fade-up delay-100">
+                <div class="step-number">02</div>
+                <div class="step-icon">🧠</div>
+                <h3>AI Analysis</h3>
+                <p>Deep learning model classifies the image and Grad-CAM identifies defect regions.</p>
+            </div>
+            <div class="step-connector animate-fade-up delay-200">
+                <svg width="40" height="24" viewBox="0 0 40 24"><path d="M0 12h36M28 4l8 8-8 8" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            </div>
+            <div class="step-card animate-fade-up delay-200">
+                <div class="step-number">03</div>
+                <div class="step-icon">📊</div>
+                <h3>Visual Results</h3>
+                <p>Receive a prediction with confidence score and heatmap overlay highlighting defect locations.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Stats Section -->
+<section class="stats" id="stats">
+    <div class="container">
+        {% if results %}
+        <div class="stats-grid">
+            <div class="stat-card glass-card animate-fade-up">
+                <div class="stat-value" data-target="{{ (results.metrics.accuracy * 100)|round(1) }}">0</div>
+                <div class="stat-suffix">%</div>
+                <div class="stat-label">Accuracy</div>
+            </div>
+            <div class="stat-card glass-card animate-fade-up delay-100">
+                <div class="stat-value" data-target="{{ (results.metrics.precision * 100)|round(1) }}">0</div>
+                <div class="stat-suffix">%</div>
+                <div class="stat-label">Precision</div>
+            </div>
+            <div class="stat-card glass-card animate-fade-up delay-100">
+                <div class="stat-value" data-target="{{ (results.metrics.recall * 100)|round(1) }}">0</div>
+                <div class="stat-suffix">%</div>
+                <div class="stat-label">Recall</div>
+            </div>
+            <div class="stat-card glass-card animate-fade-up delay-200">
+                <div class="stat-value" data-target="{{ (results.metrics.f1_score * 100)|round(1) }}">0</div>
+                <div class="stat-suffix">%</div>
+                <div class="stat-label">F1-Score</div>
+            </div>
+        </div>
+        <p class="stats-footnote">
+            Measured on a {{ results.num_test_samples }}-image held-out test set
+            {% if results.evaluated_at %}· last evaluated {{ results.evaluated_at.split('T')[0] }}{% endif %}
+            — see the <a href="/dashboard">full dashboard</a> for details.
+        </p>
+        {% else %}
+        <!-- Honest empty state: no fabricated numbers before a real model has been evaluated -->
+        <div class="stats-empty glass-card">
+            <p>📊 No evaluation has been run yet for this deployment — performance metrics will appear here once <code>python src/evaluate.py</code> has been run against a trained checkpoint.</p>
+        </div>
+        {% endif %}
+    </div>
+</section>
+
+<!-- Tech Stack -->
+<section class="tech-stack" id="tech-stack">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Built With</span>
+            <h2 class="section-title">Technology Stack</h2>
+        </div>
+        <div class="tech-badges animate-fade-up">
+            <span class="tech-badge">PyTorch</span>
+            <span class="tech-badge">EfficientNet-B0</span>
+            <span class="tech-badge">ResNet-50</span>
+            <span class="tech-badge">Grad-CAM</span>
+            <span class="tech-badge">Flask</span>
+            <span class="tech-badge">OpenCV</span>
+            <span class="tech-badge">scikit-learn</span>
+            <span class="tech-badge">MVTec AD</span>
+            <span class="tech-badge">Docker</span>
+            <span class="tech-badge">HF Spaces</span>
+        </div>
+    </div>
+</section>
+
+<!-- CTA Section -->
+<section class="cta" id="cta">
+    <div class="container">
+        <div class="cta-card glass-card animate-fade-up">
+            <h2>Ready to detect defects?</h2>
+            <p>Upload a transistor image and get instant AI-powered quality analysis with visual explanations.</p>
+            <a href="/detect" class="btn btn-primary btn-lg" id="ctaDetectBtn">
+                <span>Start Detection</span>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+            </a>
+        </div>
+    </div>
+</section>
+{% endblock %}

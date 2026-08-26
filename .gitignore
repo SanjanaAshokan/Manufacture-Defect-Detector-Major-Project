@@ -1,0 +1,49 @@
+# ============================================================
+# .gitignore — Manufacturing Defect Detector
+# ============================================================
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ----- Virtual Environment -----
+venv/
+env/
+.env/
+.venv/
+
+# ----- IDE -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- Data (large files) -----
+data/mvtec_transistor/
+data/processed/
+data/*.tar.xz
+data/*.zip
+
+# ----- Outputs -----
+outputs/checkpoints/*.pth
+outputs/checkpoints/*.pt
+outputs/logs/
+outputs/plots/
+outputs/gradcam_samples/
+
+# ----- OS -----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ----- Misc -----
+*.log
+*.tmp
+.ipynb_checkpoints/

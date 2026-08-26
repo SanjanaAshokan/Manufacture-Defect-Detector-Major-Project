@@ -1,0 +1,99 @@
+# ============================================================
+# Manufacturing Defect Detector — Configuration
+# Fine-tuned EfficientNet-B0 / ResNet-50 with Grad-CAM
+# Target: MVTec AD Transistor Dataset
+# ============================================================
+
+# ----- Dataset -----
+dataset:
+  name: "mvtec_transistor"
+  raw_dir: "data/mvtec_transistor"
+  processed_dir: "data/processed"
+  image_size: 224
+  # Split ratios for train/val (test comes from MVTec test dir)
+  val_split: 0.2
+  # Defect categories in MVTec Transistor
+  defect_types:
+    - "bent_lead"
+    - "cut_lead"
+    - "damaged_case"
+    - "misplaced"
+  classes:
+    - "good"
+    - "defective"
+  num_classes: 2
+
+# ----- Model -----
+model:
+  # Options: "efficientnet_b0", "resnet50"
+  architecture: "efficientnet_b0"
+  pretrained: true
+  num_classes: 2
+  dropout: 0.3
+  hidden_dim: 256
+  # Freeze backbone layers initially (unfreeze after warmup_epochs)
+  freeze_backbone: true
+  warmup_epochs: 3
+
+# ----- Training -----
+training:
+  epochs: 30
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  optimizer: "adamw"
+  scheduler: "onecyclelr"
+  # Mixed precision training
+  use_amp: false
+  # Balance classes via a WeightedRandomSampler (train split only). When true,
+  # train.py uses plain CrossEntropyLoss — pairing this with a weighted loss
+  # as well double-corrects for imbalance and hurts precision/recall balance.
+  use_weighted_sampler: true
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 7
+    min_delta: 0.001
+  # DataLoader
+  num_workers: 0
+  pin_memory: true
+  # Checkpointing
+  checkpoint_dir: "outputs/checkpoints"
+  save_best: true
+  save_last: true
+  # Logging
+  log_dir: "outputs/logs"
+  log_interval: 10  # Log every N batches
+  # Reproducibility
+  seed: 42
+
+# ----- Evaluation -----
+evaluation:
+  plots_dir: "outputs/plots"
+  gradcam_dir: "outputs/gradcam_samples"
+  # Threshold analysis: evaluate precision/recall at these thresholds
+  thresholds: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]
+  # Number of Grad-CAM samples to generate
+  num_gradcam_samples: 20
+
+# ----- Grad-CAM -----
+gradcam:
+  # Target layers per architecture
+  target_layers:
+    efficientnet_b0: "features.-1"    # Last convolutional block
+    resnet50: "layer4.-1"             # Last bottleneck block
+  colormap: "jet"
+  alpha: 0.5  # Overlay transparency
+
+# ----- Web Server -----
+web:
+  host: "0.0.0.0"
+  port: 7860
+  debug: false
+  max_content_length: 16  # MB
+  allowed_extensions:
+    - ".png"
+    - ".jpg"
+    - ".jpeg"
+    - ".bmp"
+    - ".tiff"

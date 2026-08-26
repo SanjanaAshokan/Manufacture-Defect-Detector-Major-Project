@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% block title %}About — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="about-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">About</span>
+            <h1 class="section-title">System Architecture</h1>
+            <p class="section-subtitle">A deep dive into the AI pipeline behind our transistor defect detection system.</p>
+        </div>
+
+        <!-- Project Overview -->
+        <div class="about-card glass-card animate-fade-up">
+            <h2>Project Overview</h2>
+            <p>
+                This project develops an AI-based manufacturing defect detection system using 
+                <strong>transfer learning</strong> with EfficientNet-B0 and ResNet-50, combined with 
+                <strong>Grad-CAM</strong> for explainable AI. The system classifies transistor images as 
+                "Good" or "Defective" and provides visual heatmaps highlighting the exact regions that 
+                triggered the defect detection.
+            </p>
+            <p>
+                Manual quality inspection in manufacturing is slow, inconsistent, and difficult to explain. 
+                This system addresses these challenges by providing accurate, automated defect detection 
+                with visual explanations that build operator trust.
+            </p>
+        </div>
+
+        <!-- Architecture Diagram -->
+        <div class="about-card glass-card animate-fade-up" id="architecture">
+            <h2>System Architecture</h2>
+            <div class="architecture-flow">
+                <div class="arch-step">
+                    <div class="arch-icon">📷</div>
+                    <h4>Image Input</h4>
+                    <p>Transistor image from production line or upload</p>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-step">
+                    <div class="arch-icon">🔄</div>
+                    <h4>Preprocessing</h4>
+                    <p>Resize (224×224), normalize (ImageNet stats), augmentation</p>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-step">
+                    <div class="arch-icon">🧠</div>
+                    <h4>CNN Backbone</h4>
+                    <p>Fine-tuned EfficientNet-B0 or ResNet-50</p>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-step">
+                    <div class="arch-icon">🏷️</div>
+                    <h4>Classification</h4>
+                    <p>Binary: Good (0) / Defective (1)</p>
+                </div>
+                <div class="arch-arrow">→</div>
+                <div class="arch-step">
+                    <div class="arch-icon">🔥</div>
+                    <h4>Grad-CAM</h4>
+                    <p>Heatmap overlay highlighting defect regions</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Model Details -->
+        <div class="about-grid">
+            <div class="about-card glass-card animate-fade-up" id="models">
+                <h2>Model Architectures</h2>
+                
+                <div class="model-detail">
+                    <h3>EfficientNet-B0</h3>
+                    <ul>
+                        <li><strong>Backbone:</strong> EfficientNet-B0 pretrained on ImageNet (1.2M images, 1000 classes)</li>
+                        <li><strong>Classifier:</strong> Dropout(0.3) → Linear(1280, 256) → ReLU → Dropout(0.2) → Linear(256, 2)</li>
+                        <li><strong>Parameters:</strong> ~5.3M total, custom head trainable first</li>
+                        <li><strong>Advantage:</strong> Compact, fast inference, great for deployment</li>
+                    </ul>
+                </div>
+
+                <div class="model-detail">
+                    <h3>ResNet-50</h3>
+                    <ul>
+                        <li><strong>Backbone:</strong> ResNet-50 V2 pretrained on ImageNet</li>
+                        <li><strong>Classifier:</strong> Dropout(0.3) → Linear(2048, 256) → ReLU → Dropout(0.2) → Linear(256, 2)</li>
+                        <li><strong>Parameters:</strong> ~25.6M total</li>
+                        <li><strong>Advantage:</strong> Well-studied, robust feature extraction</li>
+                    </ul>
+                </div>
+
+                <div class="model-detail">
+                    <h3>Training Strategy</h3>
+                    <ul>
+                        <li><strong>Transfer Learning:</strong> Freeze backbone → train classifier (3 epochs) → unfreeze all → fine-tune</li>
+                        <li><strong>Optimizer:</strong> AdamW with weight decay (1e-4)</li>
+                        <li><strong>Scheduler:</strong> OneCycleLR (cosine annealing)</li>
+                        <li><strong>Loss:</strong> Weighted CrossEntropy (handles class imbalance)</li>
+                        <li><strong>Mixed Precision:</strong> FP16 with GradScaler for 2x speedup</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="about-card glass-card animate-fade-up" id="gradcam">
+                <h2>Grad-CAM Explainability</h2>
+                <p>
+                    <strong>Gradient-weighted Class Activation Mapping (Grad-CAM)</strong> is an explainable AI 
+                    technique that produces visual explanations for CNN decisions. It uses the gradients 
+                    flowing into the final convolutional layer to produce a coarse localization map 
+                    highlighting important regions.
+                </p>
+                <div class="gradcam-explanation">
+                    <div class="explanation-step">
+                        <span class="step-num">1</span>
+                        <p>Forward pass: compute class score for the predicted class</p>
+                    </div>
+                    <div class="explanation-step">
+                        <span class="step-num">2</span>
+                        <p>Backward pass: compute gradients w.r.t. the last conv layer's feature maps</p>
+                    </div>
+                    <div class="explanation-step">
+                        <span class="step-num">3</span>
+                        <p>Global average pool the gradients to get neuron importance weights</p>
+                    </div>
+                    <div class="explanation-step">
+                        <span class="step-num">4</span>
+                        <p>Weighted combination of feature maps → ReLU → heatmap overlay</p>
+                    </div>
+                </div>
+                <p class="gradcam-note">
+                    Grad-CAM targets: <code>EfficientNet-B0: features[-1]</code> | <code>ResNet-50: layer4[-1]</code>
+                </p>
+            </div>
+        </div>
+
+        <!-- Dataset -->
+        <div class="about-card glass-card animate-fade-up" id="dataset">
+            <h2>MVTec AD Dataset — Transistor Category</h2>
+            <p>
+                The <strong>MVTec Anomaly Detection (AD)</strong> dataset is an industry-standard benchmark 
+                for unsupervised anomaly detection in manufacturing. The transistor category contains 
+                high-resolution images of transistors with 4 defect types.
+            </p>
+            <div class="dataset-grid">
+                <div class="dataset-stat">
+                    <span class="ds-value">213</span>
+                    <span class="ds-label">Training images (Good)</span>
+                </div>
+                <div class="dataset-stat">
+                    <span class="ds-value">60</span>
+                    <span class="ds-label">Test images (Good)</span>
+                </div>
+                <div class="dataset-stat">
+                    <span class="ds-value">4</span>
+                    <span class="ds-label">Defect categories</span>
+                </div>
+                <div class="dataset-stat">
+                    <span class="ds-value">~100</span>
+                    <span class="ds-label">Defective images</span>
+                </div>
+            </div>
+            <div class="defect-types">
+                <span class="defect-tag">Bent Lead</span>
+                <span class="defect-tag">Cut Lead</span>
+                <span class="defect-tag">Damaged Case</span>
+                <span class="defect-tag">Misplaced</span>
+            </div>
+        </div>
+
+        <!-- Tech Stack -->
+        <div class="about-card glass-card animate-fade-up">
+            <h2>Technology Stack</h2>
+            <div class="tech-list">
+                <div class="tech-item">
+                    <h4>Deep Learning</h4>
+                    <p>PyTorch, Torchvision, EfficientNet-B0, ResNet-50</p>
+                </div>
+                <div class="tech-item">
+                    <h4>Explainable AI</h4>
+                    <p>pytorch-grad-cam, OpenCV for visualization</p>
+                </div>
+                <div class="tech-item">
+                    <h4>Web Application</h4>
+                    <p>Flask, HTML5, CSS3, Vanilla JavaScript</p>
+                </div>
+                <div class="tech-item">
+                    <h4>Evaluation</h4>
+                    <p>scikit-learn, Matplotlib, Seaborn</p>
+                </div>
+                <div class="tech-item">
+                    <h4>Deployment</h4>
+                    <p>Docker, Hugging Face Spaces, Gunicorn</p>
+                </div>
+                <div class="tech-item">
+                    <h4>Dataset</h4>
+                    <p>MVTec AD Transistor (CC BY-NC-SA 4.0)</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
