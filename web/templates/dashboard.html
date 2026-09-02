@@ -4,17 +4,10 @@
 {% block content %}
 <section class="dashboard-section">
     <div class="container">
-        <div class="section-header animate-fade-up" style="display: flex; justify-content: space-between; align-items: flex-end;">
-            <div>
-                <span class="section-tag">Performance</span>
-                <h1 class="section-title">Model Dashboard</h1>
-                <p class="section-subtitle">Comprehensive evaluation metrics, visualizations, and threshold analysis for production deployment.</p>
-            </div>
-            {% if results %}
-            <div>
-                <a href="/api/export/metrics" class="btn btn-primary" download>📥 Export Results (CSV)</a>
-            </div>
-            {% endif %}
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Performance</span>
+            <h1 class="section-title">Model Dashboard</h1>
+            <p class="section-subtitle">Comprehensive evaluation metrics, visualizations, and threshold analysis for production deployment.</p>
         </div>
 
         {% if results %}
@@ -182,7 +175,50 @@
                 </div>
             </div>
         </div>
+        </div>
         {% endif %}
+
+        <!-- Model Comparison Table -->
+        <div class="threshold-section comparison-section glass-card animate-fade-up" style="margin-top: 30px;">
+            <h3>Architecture Comparison</h3>
+            <p class="threshold-desc">Reference guide for the three supported model architectures.</p>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Profile</th>
+                            <th>Parameters</th>
+                            <th>Speed</th>
+                            <th>Recommended Use Case</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>ConvNeXt-Tiny</strong></td>
+                            <td><span class="threshold-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--color-success); white-space: nowrap;">Balanced (Default)</span></td>
+                            <td>28.0M</td>
+                            <td>Fast</td>
+                            <td>Default choice. Best balance of speed, accuracy, and robust OOD detection.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>EfficientNet-B0</strong></td>
+                            <td><span class="threshold-badge">100% Recall</span></td>
+                            <td>5.3M</td>
+                            <td>Very Fast</td>
+                            <td>Edge devices and strict zero-defect policies (captures all anomalies, higher false positive rate).</td>
+                        </tr>
+                        <tr>
+                            <td><strong>ResNet-50</strong></td>
+                            <td><span class="threshold-badge" style="background: rgba(239, 68, 68, 0.2); color: var(--color-danger);">Aggressive</span></td>
+                            <td>25.6M</td>
+                            <td>Moderate</td>
+                            <td>High-confidence defect localization; fewer false positives but requires more compute.</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 </section>
 {% endblock %}

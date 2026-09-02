@@ -430,30 +430,6 @@ def api_predict():
         return jsonify({"error": str(e), "success": False}), 500
 
 
-@app.route("/api/export/metrics")
-def api_export_metrics():
-    """Export evaluation results as CSV."""
-    import csv
-    from flask import Response
-    
-    results = get_evaluation_results()
-    if not results:
-        return "No results available", 404
-        
-    def generate():
-        yield "Metric,Value\n"
-        yield f"Accuracy,{results['metrics']['accuracy']}\n"
-        yield f"Precision,{results['metrics']['precision']}\n"
-        yield f"Recall,{results['metrics']['recall']}\n"
-        yield f"F1-score,{results['metrics']['f1_score']}\n"
-        yield f"ROC AUC,{results['metrics']['roc_auc']}\n"
-        
-        yield "\nDefect Type,Support,Correct,Recall\n"
-        for dtype, stats in results.get("defect_type_breakdown", {}).items():
-            yield f"{dtype},{stats['support']},{stats['correct']},{stats['recall']}\n"
-
-    return Response(generate(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=metrics.csv"})
-
 
 @app.route("/api/health")
 def api_health():
