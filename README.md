@@ -9,7 +9,7 @@ This repository includes a custom-designed, fully responsive dark-mode web appli
 - **Multi-Arch Support**: Toggle between **EfficientNet-B0**, balanced **ConvNeXt-Tiny**, and heavy **ResNet-50** backbones.
 - **Explainable AI (XAI)**: Generates real-time Grad-CAM heatmap overlays indicating defect hotspots.
 - **Interactive Web Interface**: Custom glassmorphism dashboard with drag-and-drop file upload, light/dark mode toggle, real-time prediction confidence, recent detection history, and visual explanations.
-- **Production Dashboard**: Complete performance metrics with Confusion Matrix, Precision-Recall Curve, ROC Curve, per-defect-type recall breakdown, dynamic confidence threshold analysis table, and one-click CSV metrics export — all pulled live from the latest evaluation run, never hardcoded.
+- **Production Dashboard**: Complete performance metrics with Confusion Matrix, Precision-Recall Curve, ROC Curve, per-defect-type recall breakdown, and dynamic confidence threshold analysis table — all pulled live from the latest evaluation run, never hardcoded.
 - **Live Model-Status Banner**: The site automatically flags itself as "demo mode" on any page whenever no trained checkpoint is loaded, so an untrained deployment can never be mistaken for a validated one.
 - **Confidence Calibration**: Optional temperature-scaling step (`src/calibrate.py`) so the confidence % shown in the UI reflects real-world accuracy rather than raw, often overconfident softmax output. Low-margin predictions are also flagged as "uncertain" in the UI.
 - **Containerized Deployment**: Pre-configured Docker files optimized for immediate deployment on HF Spaces.
@@ -81,7 +81,7 @@ python data/download_dataset.py
 *(If automated download fails, download the transistor tarball manually from MVTec, place it in `data/mvtec_transistor` and run the script with `--manual`)*
 
 ### 3. Model Training & Evaluation
-Train the default model (EfficientNet-B0) with early stopping and mixed precision:
+Train the default model (ConvNeXt-Tiny) with early stopping and mixed precision:
 ```bash
 # Windows
 scripts\train.bat

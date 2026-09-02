@@ -79,6 +79,16 @@
                 </div>
 
                 <div class="model-detail">
+                    <h3>ConvNeXt-Tiny (Default)</h3>
+                    <ul>
+                        <li><strong>Backbone:</strong> ConvNeXt-Tiny pretrained on ImageNet</li>
+                        <li><strong>Classifier:</strong> LayerNorm → Flatten → Linear(768, 2)</li>
+                        <li><strong>Parameters:</strong> ~28.0M total</li>
+                        <li><strong>Advantage:</strong> Modern architecture, best balance of speed, accuracy, and robust out-of-domain detection</li>
+                    </ul>
+                </div>
+
+                <div class="model-detail">
                     <h3>ResNet-50</h3>
                     <ul>
                         <li><strong>Backbone:</strong> ResNet-50 V2 pretrained on ImageNet</li>
@@ -127,7 +137,7 @@
                     </div>
                 </div>
                 <p class="gradcam-note">
-                    Grad-CAM targets: <code>EfficientNet-B0: features[-1]</code> | <code>ResNet-50: layer4[-1]</code>
+                    Grad-CAM targets: <code>EfficientNet-B0: features[-1]</code> | <code>ConvNeXt-Tiny: features.7.2.block</code> | <code>ResNet-50: layer4[-1]</code>
                 </p>
             </div>
         </div>
@@ -172,7 +182,7 @@
             <div class="tech-list">
                 <div class="tech-item">
                     <h4>Deep Learning</h4>
-                    <p>PyTorch, Torchvision, EfficientNet-B0, ResNet-50</p>
+                    <p>PyTorch, Torchvision, ConvNeXt-Tiny, EfficientNet-B0, ResNet-50</p>
                 </div>
                 <div class="tech-item">
                     <h4>Explainable AI</h4>
