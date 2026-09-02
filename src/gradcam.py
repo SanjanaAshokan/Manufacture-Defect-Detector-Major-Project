@@ -94,8 +94,13 @@ def generate_gradcam(
     if target_class is not None:
         targets = [ClassifierOutputTarget(target_class)]
 
-    # Create Grad-CAM
-    cam = GradCAM(model=model, target_layers=[target_layer])
+    # Create Grad-CAM (use GradCAMPlusPlus for EfficientNet due to known gradient artifacts with base GradCAM)
+    if "efficientnet" in model.__class__.__name__.lower():
+        from pytorch_grad_cam import GradCAMPlusPlus
+        cam = GradCAMPlusPlus(model=model, target_layers=[target_layer])
+    else:
+        cam = GradCAM(model=model, target_layers=[target_layer])
+    
     grayscale_cam = cam(input_tensor=input_tensor, targets=targets)
 
     return grayscale_cam[0, :]  # Return first (and only) image's heatmap

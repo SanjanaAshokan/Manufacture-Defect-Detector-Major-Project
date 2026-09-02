@@ -20,13 +20,14 @@
                     <div class="control-group">
                         <label for="modelSelect">Model</label>
                         <select id="modelSelect" class="form-select">
-                            <option value="efficientnet_b0" selected>EfficientNet-B0 (Faster)</option>
-                            <option value="resnet50">ResNet-50 (Heavier)</option>
+                            <option value="efficientnet_b0" selected>EfficientNet-B0 (Best Model - 100% Recall)</option>
+                            <option value="convnext_tiny">ConvNeXt-Tiny (Balanced)</option>
+                            <option value="resnet50">ResNet-50 (Aggressive)</option>
                         </select>
                     </div>
                     <div class="control-group">
-                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.50</span></label>
-                        <input type="range" id="thresholdSlider" min="0.1" max="0.99" step="0.01" value="0.50" class="form-range">
+                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.65</span></label>
+                        <input type="range" id="thresholdSlider" min="0.01" max="0.99" step="0.01" value="0.65" class="form-range">
                     </div>
                 </div>
 
@@ -173,7 +174,26 @@
                     <button class="btn btn-ghost btn-sm" id="retryBtn" type="button">Retry</button>
                 </div>
             </div>
+            
+            <!-- Recent Detections Panel -->
+            <div class="recent-panel glass-card animate-fade-up delay-200" id="recentPanel">
+                <h3 class="panel-title">Recent Detections</h3>
+                <div id="recentList" class="recent-list">
+                    <p class="text-muted">No recent detections.</p>
+                </div>
+            </div>
+            
         </div>
     </div>
 </section>
+
+<style>
+.recent-list { display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto; }
+.recent-item { display: flex; align-items: center; gap: 10px; background: var(--bg-surface-glass); padding: 10px; border-radius: var(--border-radius-sm); }
+.recent-item img { width: 50px; height: 50px; object-fit: cover; border-radius: 4px; }
+.recent-item-info { flex: 1; }
+.recent-badge { font-size: 0.8em; padding: 2px 6px; border-radius: 4px; }
+.recent-badge.good { background: rgba(16, 185, 129, 0.2); color: var(--color-success); }
+.recent-badge.defective { background: rgba(239, 68, 68, 0.2); color: var(--color-danger); }
+</style>
 {% endblock %}

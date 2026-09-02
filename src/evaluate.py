@@ -67,7 +67,7 @@ def evaluate_model(
             images = images.to(device, non_blocking=True)
             outputs = model(images)
             probs = torch.softmax(outputs, dim=1)
-            _, preds = torch.max(probs, 1)
+            preds = (probs[:, 1] > 0.50).long()
 
             all_labels.extend(labels.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())

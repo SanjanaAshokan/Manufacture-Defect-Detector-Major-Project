@@ -6,10 +6,10 @@ This repository includes a custom-designed, fully responsive dark-mode web appli
 
 ## 🚀 Key Features
 
-- **Dual Arch Support**: Toggle between resource-friendly **EfficientNet-B0** and heavy **ResNet-50** backbones.
+- **Multi-Arch Support**: Toggle between **EfficientNet-B0**, balanced **ConvNeXt-Tiny**, and heavy **ResNet-50** backbones.
 - **Explainable AI (XAI)**: Generates real-time Grad-CAM heatmap overlays indicating defect hotspots.
-- **Interactive Web Interface**: Custom glassmorphism dashboard with drag-and-drop file upload, real-time prediction confidence, class probabilities, and visual explanations.
-- **Production Dashboard**: Complete performance metrics with Confusion Matrix, Precision-Recall Curve, ROC Curve, per-defect-type recall breakdown, and dynamic confidence threshold analysis table — all pulled live from the latest evaluation run, never hardcoded.
+- **Interactive Web Interface**: Custom glassmorphism dashboard with drag-and-drop file upload, light/dark mode toggle, real-time prediction confidence, recent detection history, and visual explanations.
+- **Production Dashboard**: Complete performance metrics with Confusion Matrix, Precision-Recall Curve, ROC Curve, per-defect-type recall breakdown, dynamic confidence threshold analysis table, and one-click CSV metrics export — all pulled live from the latest evaluation run, never hardcoded.
 - **Live Model-Status Banner**: The site automatically flags itself as "demo mode" on any page whenever no trained checkpoint is loaded, so an untrained deployment can never be mistaken for a validated one.
 - **Confidence Calibration**: Optional temperature-scaling step (`src/calibrate.py`) so the confidence % shown in the UI reflects real-world accuracy rather than raw, often overconfident softmax output. Low-margin predictions are also flagged as "uncertain" in the UI.
 - **Containerized Deployment**: Pre-configured Docker files optimized for immediate deployment on HF Spaces.
@@ -34,16 +34,17 @@ transistor-defect-detector/
 │
 ├── src/
 │   ├── dataset.py                    # PyTorch Dataset, augmentation, dataloaders
-│   ├── models.py                     # EfficientNet-B0 / ResNet-50 implementations
+│   ├── models.py                     # EfficientNet-B0 / ConvNeXt-Tiny / ResNet-50 implementations
 │   ├── gradcam.py                    # Hook-based Grad-CAM computation
 │   ├── train.py                      # Training loop with AMP & OneCycleLR
 │   ├── evaluate.py                   # Testing metrics & plots generation
 │   ├── predict.py                    # CLI prediction tool
+│   ├── realtime.py                   # Real-time webcam inference with live Grad-CAM
 │   └── utils.py                      # Saving/loading checkpoints & helper classes
 │
 ├── web/
 │   ├── app.py                        # Flask server backend
-│   ├── templates/                    # HTML structure files
+│   ├── templates/                    # HTML structure files (index, dashboard, detect, realtime)
 │   └── static/                       # Custom CSS, JS, and image assets
 │
 ├── scripts/
@@ -114,6 +115,13 @@ Start the custom Flask dashboard:
 python web/app.py
 ```
 Open **[http://localhost:7860](http://localhost:7860)** in your browser. If you haven't trained/evaluated yet, the site will clearly show a "Demo mode" banner instead of pretending to be a validated model.
+
+### 6. Real-time Webcam Inference
+To run real-time defect detection using your webcam with live Grad-CAM overlay:
+```bash
+python src/realtime.py
+```
+*Note: The project uses `opencv-python-headless` by default. To use the desktop window for real-time capture, you must have the full OpenCV version installed. If the window doesn't appear, run `pip uninstall opencv-python-headless -y` and `pip install opencv-python`.*
 
 ---
 

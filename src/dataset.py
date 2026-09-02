@@ -29,9 +29,10 @@ class TransistorDataset(Dataset):
     CLASS_NAMES = ["good", "defective"]
     CLASS_TO_IDX = {"good": 0, "defective": 1}
 
-    def __init__(self, root: str, transform: Optional[transforms.Compose] = None):
+    def __init__(self, root: str, transform: Optional[transforms.Compose] = None, good_transform: Optional[transforms.Compose] = None):
         self.root = Path(root)
         self.transform = transform
+        self.good_transform = good_transform
         self.samples = []
         self.targets = []
         self.imgs = []
@@ -65,6 +66,11 @@ class TransistorDataset(Dataset):
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, int]:
         image = self.imgs[idx]
         label = self.targets[idx]
+        
+        # Apply exclusive augmentation for 'good' (label == 0)
+        if label == 0 and hasattr(self, 'good_transform') and self.good_transform:
+            image = self.good_transform(image)
+            
         if self.transform:
             image = self.transform(image)
         return image, label
@@ -84,13 +90,20 @@ class TransistorDataset(Dataset):
         return torch.FloatTensor([class_weights[t] for t in self.targets])
 
 
+
+def get_good_transforms(image_size: int = 224) -> transforms.Compose:
+    """Aggressive augmentation exclusively for the 'Good' class."""
+    return transforms.Compose([
+        transforms.RandomResizedCrop(image_size + 32, scale=(0.7, 1.0)), # Geometric cropping
+        transforms.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0)),      # Edge blur
+    ])
+
 def get_train_transforms(image_size: int = 224) -> transforms.Compose:
     """Training augmentation pipeline."""
     return transforms.Compose([
         transforms.Resize((image_size + 32, image_size + 32)),
-        transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
+        transforms.CenterCrop(image_size),
         transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.5),
         transforms.RandomRotation(degrees=15),
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
         transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),

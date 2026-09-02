@@ -4,10 +4,17 @@
 {% block content %}
 <section class="dashboard-section">
     <div class="container">
-        <div class="section-header animate-fade-up">
-            <span class="section-tag">Performance</span>
-            <h1 class="section-title">Model Dashboard</h1>
-            <p class="section-subtitle">Comprehensive evaluation metrics, visualizations, and threshold analysis for production deployment.</p>
+        <div class="section-header animate-fade-up" style="display: flex; justify-content: space-between; align-items: flex-end;">
+            <div>
+                <span class="section-tag">Performance</span>
+                <h1 class="section-title">Model Dashboard</h1>
+                <p class="section-subtitle">Comprehensive evaluation metrics, visualizations, and threshold analysis for production deployment.</p>
+            </div>
+            {% if results %}
+            <div>
+                <a href="/api/export/metrics" class="btn btn-primary" download>📥 Export Results (CSV)</a>
+            </div>
+            {% endif %}
         </div>
 
         {% if results %}

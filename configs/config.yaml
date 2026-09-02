@@ -25,8 +25,8 @@ dataset:
 
 # ----- Model -----
 model:
-  # Options: "efficientnet_b0", "resnet50"
-  architecture: "efficientnet_b0"
+  # Options: "efficientnet_b0", "resnet50", "convnext_tiny", "efficientnet_v2_s"
+  architecture: "convnext_tiny"
   pretrained: true
   num_classes: 2
   dropout: 0.3
@@ -48,7 +48,7 @@ training:
   # Balance classes via a WeightedRandomSampler (train split only). When true,
   # train.py uses plain CrossEntropyLoss — pairing this with a weighted loss
   # as well double-corrects for imbalance and hurts precision/recall balance.
-  use_weighted_sampler: true
+  use_weighted_sampler: false
   # Early stopping
   early_stopping:
     enabled: true
@@ -56,7 +56,7 @@ training:
     min_delta: 0.001
   # DataLoader
   num_workers: 0
-  pin_memory: true
+  pin_memory: false
   # Checkpointing
   checkpoint_dir: "outputs/checkpoints"
   save_best: true
@@ -82,6 +82,8 @@ gradcam:
   target_layers:
     efficientnet_b0: "features.-1"    # Last convolutional block
     resnet50: "layer4.-1"             # Last bottleneck block
+    convnext_tiny: "features.7.2.block"
+    efficientnet_v2_s: "features.-1"
   colormap: "jet"
   alpha: 0.5  # Overlay transparency
 

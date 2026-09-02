@@ -38,7 +38,8 @@ class DefectDetectorEfficientNet(nn.Module):
         self.backbone.classifier = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(in_features, hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
             nn.Dropout(p=dropout * 0.67),
             nn.Linear(hidden_dim, num_classes)
         )
@@ -48,7 +49,9 @@ class DefectDetectorEfficientNet(nn.Module):
 
     def get_gradcam_target_layer(self):
         """Return the target layer for Grad-CAM (last conv block)."""
-        return self.backbone.features[-1]
+        # We target the Conv2d layer directly ([0]) inside the Conv2dNormActivation 
+        # to avoid the inplace SiLU activation which breaks pytorch-grad-cam
+        return self.backbone.features[-1][0]
 
     def freeze_backbone(self):
         """Freeze all backbone layers (only classifier is trainable)."""
@@ -92,7 +95,8 @@ class DefectDetectorResNet(nn.Module):
         self.backbone.fc = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(in_features, hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
             nn.Dropout(p=dropout * 0.67),
             nn.Linear(hidden_dim, num_classes)
         )
@@ -121,6 +125,80 @@ class DefectDetectorResNet(nn.Module):
         """Return the number of trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+
+
+
+class DefectDetectorConvNeXt(nn.Module):
+    """ConvNeXt-Tiny fine-tuned for transistor defect detection."""
+    def __init__(self, num_classes: int = 2, dropout: float = 0.3, hidden_dim: int = 256, pretrained: bool = True):
+        super().__init__()
+        weights = models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1 if pretrained else None
+        self.backbone = models.convnext_tiny(weights=weights)
+        in_features = self.backbone.classifier[2].in_features
+        self.backbone.classifier = nn.Sequential(
+            nn.Flatten(1),
+            nn.LayerNorm((in_features,), eps=1e-6, elementwise_affine=True),
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(p=dropout * 0.67),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
+    def get_gradcam_target_layer(self):
+        return self.backbone.features[-1][-1]
+
+    def freeze_backbone(self):
+        for param in self.backbone.features.parameters():
+            param.requires_grad = False
+        print("[Model] Backbone frozen - only classifier is trainable")
+
+    def unfreeze_backbone(self):
+        for param in self.parameters():
+            param.requires_grad = True
+        print("[Model] All layers unfrozen for fine-tuning")
+
+    def get_trainable_params(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class DefectDetectorEfficientNetV2(nn.Module):
+    """EfficientNet-V2-S fine-tuned for transistor defect detection."""
+    def __init__(self, num_classes: int = 2, dropout: float = 0.3, hidden_dim: int = 256, pretrained: bool = True):
+        super().__init__()
+        weights = models.EfficientNet_V2_S_Weights.IMAGENET1K_V1 if pretrained else None
+        self.backbone = models.efficientnet_v2_s(weights=weights)
+        in_features = self.backbone.classifier[1].in_features
+        self.backbone.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
+            nn.Linear(in_features, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
+            nn.Dropout(p=dropout * 0.67),
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x)
+
+    def get_gradcam_target_layer(self):
+        return self.backbone.features[-1]
+
+    def freeze_backbone(self):
+        for param in self.backbone.features.parameters():
+            param.requires_grad = False
+        print("[Model] Backbone frozen - only classifier is trainable")
+
+    def unfreeze_backbone(self):
+        for param in self.parameters():
+            param.requires_grad = True
+        print("[Model] All layers unfrozen for fine-tuning")
+
+    def get_trainable_params(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 def get_model(
     architecture: str = "efficientnet_b0",
@@ -156,8 +234,18 @@ def get_model(
             num_classes=num_classes, dropout=dropout,
             hidden_dim=hidden_dim, pretrained=pretrained
         )
+    elif architecture == "convnext_tiny":
+        model = DefectDetectorConvNeXt(
+            num_classes=num_classes, dropout=dropout,
+            hidden_dim=hidden_dim, pretrained=pretrained
+        )
+    elif architecture == "efficientnet_v2_s":
+        model = DefectDetectorEfficientNetV2(
+            num_classes=num_classes, dropout=dropout,
+            hidden_dim=hidden_dim, pretrained=pretrained
+        )
     else:
-        raise ValueError(f"Unknown architecture: {architecture}. Choose 'efficientnet_b0' or 'resnet50'.")
+        raise ValueError(f"Unknown architecture: {architecture}. Choose 'efficientnet_b0', 'resnet50', 'convnext_tiny', or 'efficientnet_v2_s'.")
 
     if freeze_backbone:
         model.freeze_backbone()

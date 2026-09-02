@@ -318,6 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
         .then(data => {
             if (data.success) {
                 renderResults(data);
+                updateRecentDetections(data);
             } else {
                 throw new Error(data.error || 'Prediction process failed.');
             }
@@ -394,3 +395,49 @@ document.addEventListener('DOMContentLoaded', () => {
         resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 });
+
+    // ---- Recent Detections Logic ----
+    function updateRecentDetections(resultData) {
+        let recent = JSON.parse(localStorage.getItem('recentDetections') || '[]');
+        recent.unshift({
+            image: resultData.original_image.startsWith('data:image') ? resultData.original_image : 'data:image/png;base64,' + resultData.original_image,
+            prediction: resultData.prediction,
+            confidence: resultData.confidence,
+            threshold: resultData.threshold,
+            time: new Date().toLocaleTimeString()
+        });
+        if (recent.length > 5) recent.pop();
+        localStorage.setItem('recentDetections', JSON.stringify(recent));
+        renderRecentDetections();
+    }
+    
+    function renderRecentDetections() {
+        const recentList = document.getElementById('recentList');
+        if (!recentList) return;
+        
+        const recent = JSON.parse(localStorage.getItem('recentDetections') || '[]');
+        if (recent.length === 0) {
+            recentList.innerHTML = '<p class="text-muted">No recent detections.</p>';
+            return;
+        }
+        
+        recentList.innerHTML = '';
+        recent.forEach(item => {
+            const isGood = item.prediction.toLowerCase() === 'good';
+            const badgeClass = isGood ? 'good' : 'defective';
+            const threshText = item.threshold !== undefined ? `<span style="font-size: 0.85em; color: #8a9bb4; margin-left: 6px;">(Thr: ${parseFloat(item.threshold).toFixed(2)})</span>` : '';
+            recentList.innerHTML += `
+                <div class="recent-item">
+                    <img src="${item.image}" alt="thumb">
+                    <div class="recent-item-info">
+                        <strong>${item.time}</strong><br>
+                        <span class="recent-badge ${badgeClass}">${item.prediction}</span>
+                        <span>${(item.confidence * 100).toFixed(1)}%</span>${threshText}
+                    </div>
+                </div>
+            `;
+        });
+    }
+    
+    // Call render on load
+    renderRecentDetections();
