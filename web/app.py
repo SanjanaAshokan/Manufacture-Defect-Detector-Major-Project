@@ -179,6 +179,61 @@ def inject_model_status():
 
 
 # ============================================================
+# Advanced OOD Anomaly Detector
+# ============================================================
+ood_model_cache = None
+ood_ref_embedding = None
+
+def get_ood_model_and_ref():
+    """Lazily loads a lightweight feature extractor for robust OOD detection."""
+    global ood_model_cache, ood_ref_embedding
+    if ood_model_cache is not None:
+        return ood_model_cache, ood_ref_embedding
+        
+    import torch
+    import torch.nn.functional as F
+    import torchvision.models as models
+    import torchvision.transforms as T
+    from PIL import Image
+    import os
+    
+    print("[Web] Loading robust OOD Anomaly Detector...")
+    # Load lightweight MobileNetV3
+    ood_model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+    ood_model.classifier = torch.nn.Identity()
+    ood_model.eval()
+    ood_model.to(DEVICE)
+    
+    transform = T.Compose([
+        T.Resize((224, 224)),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    examples_dir = PROJECT_ROOT / "web" / "examples"
+    embeddings = []
+    
+    if examples_dir.exists():
+        # Build reference profile from good examples
+        for f in os.listdir(examples_dir):
+            if "good" in f.lower() and f.endswith((".png", ".jpg")):
+                try:
+                    img = Image.open(examples_dir / f).convert("RGB")
+                    tensor = transform(img).unsqueeze(0).to(DEVICE)
+                    with torch.no_grad():
+                        feats = ood_model(tensor)
+                        embeddings.append(feats)
+                except Exception:
+                    pass
+                    
+    if embeddings:
+        ref = torch.mean(torch.cat(embeddings), dim=0, keepdim=True)
+        ood_ref_embedding = F.normalize(ref, p=2, dim=1)
+        
+    ood_model_cache = (ood_model, transform)
+    return ood_model_cache, ood_ref_embedding
+
+# ============================================================
 # Routes
 # ============================================================
 
@@ -202,6 +257,14 @@ def detect():
     default_arch = CONFIG["model"]["architecture"]
     model_status = get_model_status(default_arch)
     return render_template("detect.html", examples=examples, model_status=model_status)
+
+
+@app.route("/realtime")
+def realtime():
+    """Real-time webcam interface page."""
+    default_arch = CONFIG["model"]["architecture"]
+    model_status = get_model_status(default_arch)
+    return render_template("realtime.html", model_status=model_status)
 
 
 @app.route("/dashboard")
@@ -259,9 +322,65 @@ def api_predict():
         image_bytes = file.read()
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
 
+        # OOD Check
+        import numpy as np
+        import cv2
+        bypass_ood = request.form.get("bypass_ood") == "true"
+        if not bypass_ood:
+            # 1. Basic image quality check
+            img_array = np.array(image)
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            
+            std_dev = np.std(gray)
+            mean_val = np.mean(gray)
+            
+            if std_dev > 80 or std_dev < 5 or mean_val < 10 or mean_val > 240:
+                return jsonify({"error": "Image appears to be out-of-domain (too uniform, dark, or bright). Please upload an image of a transistor.", "success": False}), 400
+                
+            # 2. Advanced Anomaly Detection (Cosine Similarity)
+            try:
+                import torch
+                import torch.nn.functional as F
+                (ood_model, transform), ref_emb = get_ood_model_and_ref()
+                
+                if ref_emb is not None:
+                    img_tensor = transform(image).unsqueeze(0).to(DEVICE)
+                    with torch.no_grad():
+                        feats = ood_model(img_tensor)
+                        feats_norm = F.normalize(feats, p=2, dim=1)
+                        # Compute cosine similarity with reference
+                        similarity = torch.sum(feats_norm * ref_emb).item()
+                        
+                    # Usually similarity > 0.6 for in-domain, < 0.4 for completely different objects (faces, forks)
+                    if similarity < 0.40:
+                        return jsonify({"error": f"Object does not match a transistor (Similarity: {similarity:.2f}). Please scan a transistor.", "success": False}), 400
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                # Fallback to OpenCV checks if torch OOD fails...
+                circles = cv2.HoughCircles(
+                    gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=10, 
+                    param1=50, param2=30, minRadius=2, maxRadius=30
+                )
+                num_circles = len(circles[0]) if circles is not None else 0
+                if num_circles < 5:
+                    _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
+                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        cnt = max(contours, key=cv2.contourArea)
+                        rect = cv2.minAreaRect(cnt)
+                        (x, y), (w, h), angle = rect
+                        if w > 0 and h > 0:
+                            aspect_ratio = max(w/h, h/w)
+                            area = w * h
+                            if aspect_ratio > 2.5:
+                                return jsonify({"error": "Object shape does not match a transistor (too elongated like a fork or cable). Please scan a transistor.", "success": False}), 400
+                            if area < (gray.shape[0] * gray.shape[1] * 0.01):
+                                return jsonify({"error": "No significant object detected. Please move closer.", "success": False}), 400
+
         # Get parameters
         architecture = request.form.get("architecture", CONFIG["model"]["architecture"])
-        threshold = float(request.form.get("threshold", 0.5))
+        threshold = float(request.form.get("threshold", 0.65))
 
         # Load model
         model, target_layer = get_or_load_model(architecture)
@@ -277,20 +396,18 @@ def api_predict():
             temperature=status.get("temperature", 1.0),
         )
 
-        # Determine status based on threshold
+        # Determine status based on threshold slider
         is_defective = result["probabilities"]["defective"] >= threshold
+        prediction_text = "Defective" if is_defective else "Good"
 
-        # Flag low-margin predictions as uncertain rather than presenting
-        # a confident-looking badge for a coin-flip result. This doesn't fix
-        # a wrong prediction, but it stops the UI from overstating confidence
-        # near the decision boundary.
+        # Flag low-margin predictions as uncertain
         margin = abs(result["probabilities"]["defective"] - threshold)
         is_uncertain = margin < 0.10
 
         # Build response
         response = {
             "success": True,
-            "prediction": result["predicted_label"],
+            "prediction": prediction_text,
             "confidence": round(result["confidence"], 4),
             "probabilities": {
                 k: round(v, 4) for k, v in result["probabilities"].items()
@@ -311,6 +428,31 @@ def api_predict():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/export/metrics")
+def api_export_metrics():
+    """Export evaluation results as CSV."""
+    import csv
+    from flask import Response
+    
+    results = get_evaluation_results()
+    if not results:
+        return "No results available", 404
+        
+    def generate():
+        yield "Metric,Value\n"
+        yield f"Accuracy,{results['metrics']['accuracy']}\n"
+        yield f"Precision,{results['metrics']['precision']}\n"
+        yield f"Recall,{results['metrics']['recall']}\n"
+        yield f"F1-score,{results['metrics']['f1_score']}\n"
+        yield f"ROC AUC,{results['metrics']['roc_auc']}\n"
+        
+        yield "\nDefect Type,Support,Correct,Recall\n"
+        for dtype, stats in results.get("defect_type_breakdown", {}).items():
+            yield f"{dtype},{stats['support']},{stats['correct']},{stats['recall']}\n"
+
+    return Response(generate(), mimetype="text/csv", headers={"Content-Disposition": "attachment;filename=metrics.csv"})
 
 
 @app.route("/api/health")

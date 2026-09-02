@@ -1,0 +1,457 @@
+{% extends "base.html" %}
+{% block title %}Live Camera — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="detect-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Live</span>
+            <h1 class="section-title">Real-Time Camera Detection</h1>
+            <p class="section-subtitle">Use your webcam to detect transistor defects in real time directly in your browser.</p>
+        </div>
+
+        <div class="detect-layout">
+            <!-- Camera Panel -->
+            <div class="detect-panel glass-card animate-fade-up" id="cameraPanel">
+                <h3 class="panel-title">Webcam Feed</h3>
+
+                <!-- Model & Threshold Controls -->
+                <div class="detect-controls">
+                    <div class="control-group">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect" class="form-select">
+                            <option value="efficientnet_b0" selected>EfficientNet-B0 (Best Model - 100% Recall)</option>
+                            <option value="convnext_tiny">ConvNeXt-Tiny (Balanced)</option>
+                            <option value="resnet50">ResNet-50 (Aggressive)</option>
+                        </select>
+                    </div>
+                    <div class="control-group">
+                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.65</span></label>
+                        <input type="range" id="thresholdSlider" min="0.01" max="0.99" step="0.01" value="0.65" class="form-range">
+                    </div>
+                </div>
+
+                {% if not model_status.trained %}
+                <div class="detect-status-banner" id="modelStatusNote">
+                    <span>⚠</span>
+                    <span>This architecture has no trained checkpoint — results below will use raw, untrained weights and won't reflect real defect-detection accuracy.</span>
+                </div>
+                {% endif %}
+
+                <!-- Camera Container -->
+                <div class="camera-container" style="position: relative; border-radius: var(--border-radius-md); overflow: hidden; background: #000; min-height: 300px; display: flex; align-items: center; justify-content: center;">
+                    <video id="webcam" autoplay playsinline style="width: 100%; height: auto; display: block;"></video>
+                    <!-- Overlay image from Grad-CAM -->
+                    <img id="overlayImage" src="" alt="Grad-CAM Overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.7; display: none; pointer-events: none;">
+                    
+                    <div id="scanningStatus" class="detect-status-banner" style="display:none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.7); color: #fff; padding: 8px 16px; border-radius: 20px; z-index: 10; font-size: 14px;">
+                        <span class="spinner" style="border-width: 2px; width: 14px; height: 14px; display: inline-block; vertical-align: middle; margin-right: 8px; border-top-color: #fff;"></span>
+                        <span>Hold transistor still to scan...</span>
+                    </div>
+
+                    <div id="cameraSetup" style="position: absolute; text-align: center; padding: 20px;">
+                        <button class="btn btn-primary" id="startCameraBtn">Start Camera</button>
+                    </div>
+                </div>
+
+                <div style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+                    <button class="btn btn-danger" id="stopCameraBtn" style="display:none;">Stop Camera</button>
+                    <span id="fpsCounter" style="color: var(--color-text-muted); font-family: monospace; display:none;">FPS: 0</span>
+                </div>
+
+                <!-- Hidden canvas for capturing frames -->
+                <canvas id="captureCanvas" style="display: none;"></canvas>
+            </div>
+
+            <!-- Results Panel -->
+            <div class="results-panel glass-card animate-fade-up delay-100" id="resultsPanel">
+                <h3 class="panel-title">Live Analysis</h3>
+
+                <!-- Empty State -->
+                <div class="results-empty" id="resultsEmpty">
+                    <div class="empty-icon">
+                        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                    </div>
+                    <p>Start the camera to see real-time analysis results here.</p>
+                </div>
+
+                <!-- Results Content -->
+                <div class="results-content" id="resultsContent" style="display:none;">
+                    <!-- Prediction Badge -->
+                    <div class="prediction-badge" id="predictionBadge">
+                        <span class="prediction-icon" id="predictionIcon">✓</span>
+                        <span class="prediction-label" id="predictionLabel">Good</span>
+                    </div>
+
+                    <!-- Confidence Bar -->
+                    <div class="confidence-section">
+                        <div class="confidence-header">
+                            <span>Confidence</span>
+                            <span class="confidence-value" id="confidenceValue">0%</span>
+                        </div>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" id="confidenceFill" style="width:0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Probability Bars -->
+                    <div class="probability-section">
+                        <div class="prob-row">
+                            <span class="prob-label">Good</span>
+                            <div class="prob-bar">
+                                <div class="prob-fill prob-fill-good" id="probGood" style="width:0%"></div>
+                            </div>
+                            <span class="prob-value" id="probGoodValue">0%</span>
+                        </div>
+                        <div class="prob-row">
+                            <span class="prob-label">Defective</span>
+                            <div class="prob-bar">
+                                <div class="prob-fill prob-fill-defective" id="probDefective" style="width:0%"></div>
+                            </div>
+                            <span class="prob-value" id="probDefectiveValue">0%</span>
+                        </div>
+                    </div>
+
+                    <!-- Grad-CAM Images -->
+                    <div class="gradcam-section" style="margin-top: 20px;">
+                        <div class="gradcam-tabs">
+                            <button class="gradcam-tab active" data-tab="overlay" id="rtTabOverlay">Overlay</button>
+                            <button class="gradcam-tab" data-tab="heatmap" id="rtTabHeatmap">Heatmap</button>
+                            <button class="gradcam-tab" data-tab="original" id="rtTabOriginal">Original</button>
+                        </div>
+                        <div class="gradcam-display">
+                            <img id="rtGradcamImage" src="" alt="Grad-CAM Visualization" class="gradcam-img">
+                        </div>
+                        <p class="gradcam-caption">Grad-CAM highlights the regions most influential in the model's decision.</p>
+                    </div>
+
+                    <!-- Analyze Another -->
+                    <button class="btn btn-ghost btn-block" id="scanAnotherBtn" type="button" style="margin-top: 15px;">
+                        ↩ Scan Another Transistor
+                    </button>
+                </div>
+                
+                <!-- Error State -->
+                <div class="results-error" id="resultsError" style="display:none;">
+                    <div class="error-icon">⚠</div>
+                    <p class="error-message" id="errorMessage">An error occurred connecting to the server.</p>
+                </div>
+            </div>
+            
+            <!-- Recent Detections Panel -->
+            <div class="recent-panel glass-card animate-fade-up delay-200" id="recentPanel">
+                <h3 class="panel-title">Recent Detections</h3>
+                <div id="recentList" class="recent-list">
+                    <p class="text-muted">No recent detections.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<style>
+.recent-list { display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto; }
+.recent-item { display: flex; align-items: center; gap: 10px; background: var(--bg-surface-glass); padding: 10px; border-radius: var(--border-radius-sm); }
+.recent-item img { width: 50px; height: 50px; object-fit: cover; border-radius: 4px; }
+.recent-item-info { flex: 1; }
+.recent-badge { font-size: 0.8em; padding: 2px 6px; border-radius: 4px; }
+.recent-badge.good { background: rgba(16, 185, 129, 0.2); color: var(--color-success); }
+.recent-badge.defective { background: rgba(239, 68, 68, 0.2); color: var(--color-danger); }
+</style>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const video = document.getElementById('webcam');
+    const overlayImage = document.getElementById('overlayImage');
+    const startCameraBtn = document.getElementById('startCameraBtn');
+    const stopCameraBtn = document.getElementById('stopCameraBtn');
+    const cameraSetup = document.getElementById('cameraSetup');
+    const canvas = document.getElementById('captureCanvas');
+    const fpsCounter = document.getElementById('fpsCounter');
+    
+    // UI Elements
+    const resultsEmpty = document.getElementById('resultsEmpty');
+    const resultsContent = document.getElementById('resultsContent');
+    const resultsError = document.getElementById('resultsError');
+    const predictionBadge = document.getElementById('predictionBadge');
+    const predictionIcon = document.getElementById('predictionIcon');
+    const predictionLabel = document.getElementById('predictionLabel');
+    const confidenceValue = document.getElementById('confidenceValue');
+    const confidenceFill = document.getElementById('confidenceFill');
+    const probGood = document.getElementById('probGood');
+    const probGoodValue = document.getElementById('probGoodValue');
+    const probDefective = document.getElementById('probDefective');
+    const probDefectiveValue = document.getElementById('probDefectiveValue');
+    const thresholdSlider = document.getElementById('thresholdSlider');
+    const thresholdValue = document.getElementById('thresholdValue');
+    const modelSelect = document.getElementById('modelSelect');
+    const rtGradcamImage = document.getElementById('rtGradcamImage');
+    const scanAnotherBtn = document.getElementById('scanAnotherBtn');
+    const scanningStatus = document.getElementById('scanningStatus');
+
+    let stream = null;
+    let isProcessing = false;
+    let keepProcessing = false;
+    let activeImages = {
+        original: '',
+        heatmap: '',
+        overlay: ''
+    };
+    
+    // Motion tracking variables
+    let prevImageData = null;
+    let stillFrames = 0;
+    const TARGET_STILL_FRAMES = 3; // ~0.5 seconds at 6-7 fps
+    const MOTION_THRESHOLD = 30; // Average pixel difference
+
+    // Hidden motion canvas
+    const motionCanvas = document.createElement('canvas');
+    motionCanvas.width = 64;
+    motionCanvas.height = 48;
+    const motionCtx = motionCanvas.getContext('2d', {willReadFrequently: true});
+
+    // Handle scan another
+    if(scanAnotherBtn) {
+        scanAnotherBtn.addEventListener('click', () => {
+            resultsEmpty.style.display = 'none';
+            resultsContent.style.display = 'none';
+            resultsError.style.display = 'none';
+            startCamera();
+        });
+    }
+
+    // FPS tracking
+    let frameCount = 0;
+    let lastFpsTime = Date.now();
+
+    // Update threshold UI
+    thresholdSlider.addEventListener('input', (e) => {
+        thresholdValue.textContent = e.target.value;
+    });
+
+    // Grad-CAM tabs
+    const rtTabs = document.querySelectorAll('.gradcam-tab');
+    rtTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            rtTabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            
+            const activeTab = tab.getAttribute('data-tab');
+            if (activeImages[activeTab]) {
+                rtGradcamImage.src = activeImages[activeTab];
+            }
+        });
+    });
+
+    async function startCamera() {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+            video.srcObject = stream;
+            cameraSetup.style.display = 'none';
+            stopCameraBtn.style.display = 'block';
+            fpsCounter.style.display = 'block';
+            scanningStatus.style.display = 'block';
+            
+            resultsEmpty.style.display = 'none';
+            // We do not show resultsContent immediately; wait until captured.
+            resultsError.style.display = 'none';
+            
+            stillFrames = 0;
+            prevImageData = null;
+            keepProcessing = true;
+            video.onloadedmetadata = () => {
+                processLoop();
+            };
+        } catch (err) {
+            console.error("Error accessing camera:", err);
+            alert("Could not access the camera. Please ensure you have granted permission.");
+        }
+    }
+
+    function stopCamera() {
+        keepProcessing = false;
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+        }
+        cameraSetup.style.display = 'block';
+        stopCameraBtn.style.display = 'none';
+        fpsCounter.style.display = 'none';
+        scanningStatus.style.display = 'none';
+        overlayImage.style.display = 'none';
+    }
+
+    startCameraBtn.addEventListener('click', startCamera);
+    stopCameraBtn.addEventListener('click', stopCamera);
+
+    async function processLoop() {
+        if (!keepProcessing) return;
+        
+        if (isProcessing) {
+            // Skip frame if still processing previous
+            requestAnimationFrame(processLoop);
+            return;
+        }
+
+        isProcessing = true;
+        
+        // Calculate FPS
+        frameCount++;
+        const now = Date.now();
+        if (now - lastFpsTime >= 1000) {
+            fpsCounter.textContent = `FPS: ${frameCount}`;
+            frameCount = 0;
+            lastFpsTime = now;
+        }
+
+        try {
+            // Draw for motion detection
+            motionCtx.drawImage(video, 0, 0, motionCanvas.width, motionCanvas.height);
+            const currentImageData = motionCtx.getImageData(0, 0, motionCanvas.width, motionCanvas.height).data;
+            
+            let isStill = false;
+            
+            if (prevImageData) {
+                let diffSum = 0;
+                for (let i = 0; i < currentImageData.length; i += 4) {
+                    diffSum += Math.abs(currentImageData[i] - prevImageData[i]);
+                    diffSum += Math.abs(currentImageData[i+1] - prevImageData[i+1]);
+                    diffSum += Math.abs(currentImageData[i+2] - prevImageData[i+2]);
+                }
+                const avgDiff = diffSum / (motionCanvas.width * motionCanvas.height * 3);
+                
+                if (avgDiff < MOTION_THRESHOLD) {
+                    stillFrames++;
+                } else {
+                    stillFrames = 0;
+                }
+                
+                if (stillFrames >= TARGET_STILL_FRAMES) {
+                    isStill = true;
+                }
+            }
+            
+            // Store current frame for next time
+            prevImageData = new Uint8ClampedArray(currentImageData);
+
+            // Draw full res video frame to canvas for API inference
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Get blob from canvas
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+            
+            if (!blob) {
+                isProcessing = false;
+                requestAnimationFrame(processLoop);
+                return;
+            }
+
+            // Prepare form data
+            const formData = new FormData();
+            formData.append('image', blob, 'frame.jpg');
+            formData.append('architecture', modelSelect.value);
+            formData.append('threshold', thresholdSlider.value);
+            formData.append('bypass_ood', 'false');
+
+            // Send to API
+            const response = await fetch('/api/predict', {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+            
+            if (response.ok && data.success) {
+                if (!isStill) {
+                    scanningStatus.style.display = 'block';
+                    scanningStatus.innerHTML = '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,0.3); border-radius:50%; border-top-color:#fff; animation:spin 1s ease-in-out infinite; margin-right:8px;"></span><span>Hold transistor still to scan...</span>';
+                    resultsError.style.display = 'none';
+                    // We don't stop the camera. Loop will continue via finally.
+                } else {
+                    scanningStatus.style.display = 'none';
+                    updateUI(data);
+                    resultsError.style.display = 'none';
+                    
+                    // Add to recent detections if the global function exists
+                    if (typeof updateRecentDetections === 'function') {
+                        updateRecentDetections(data);
+                    }
+                    
+                    // Stop camera since we successfully captured!
+                    stopCamera();
+                    // However, keep the results and scan another button visible
+                    resultsEmpty.style.display = 'none';
+                    resultsContent.style.display = 'block';
+                    cameraSetup.style.display = 'none'; // hide start button when viewing results
+                    
+                    // Return here so loop doesn't continue
+                    isProcessing = false;
+                    return;
+                }
+            } else {
+                throw new Error(data.error || "Server error");
+            }
+        } catch (err) {
+            console.error(err);
+            if (err.message && (err.message.includes("out-of-domain") || err.message.includes("transistor"))) {
+                scanningStatus.style.display = 'block';
+                scanningStatus.innerHTML = '<span style="color: #ffaa00;">⚠️ ' + err.message + '</span>';
+                // Reset still frames so they have to reposition and hold still again
+                stillFrames = 0;
+            }
+            // Don't show generic error immediately to avoid flickering on dropped frames, 
+            // but log it.
+        } finally {
+            isProcessing = false;
+            // Short delay to avoid hammering the server too hard
+            setTimeout(() => {
+                requestAnimationFrame(processLoop);
+            }, 150); // ~6-7 FPS cap
+        }
+    }
+
+    function updateUI(data) {
+        // Update overlay
+        overlayImage.src = `data:image/png;base64,${data.heatmap}`;
+        overlayImage.style.display = 'block';
+
+        // Cache images for tabs
+        activeImages.original = `data:image/png;base64,${data.original_image}`;
+        activeImages.heatmap = `data:image/png;base64,${data.heatmap}`;
+        activeImages.overlay = `data:image/png;base64,${data.overlay}`;
+
+        // Update the active tab image
+        const activeTabElement = document.querySelector('.gradcam-tab.active');
+        if (activeTabElement) {
+            const activeTab = activeTabElement.getAttribute('data-tab');
+            rtGradcamImage.src = activeImages[activeTab];
+        }
+
+        // Update badge
+        const isDefective = data.is_defective;
+        predictionBadge.className = 'prediction-badge ' + (isDefective ? 'defective' : 'good');
+        predictionIcon.textContent = isDefective ? '⚠' : '✓';
+        predictionLabel.textContent = data.prediction;
+
+        // Update confidence
+        const confPercent = (data.confidence * 100).toFixed(1) + '%';
+        confidenceValue.textContent = confPercent;
+        confidenceFill.style.width = confPercent;
+        confidenceFill.style.backgroundColor = isDefective ? 'var(--color-danger)' : 'var(--color-success)';
+
+        // Update probabilities
+        const pGood = (data.probabilities.good * 100).toFixed(1) + '%';
+        const pDef = (data.probabilities.defective * 100).toFixed(1) + '%';
+        
+        probGood.style.width = pGood;
+        probGoodValue.textContent = pGood;
+        
+        probDefective.style.width = pDef;
+        probDefectiveValue.textContent = pDef;
+    }
+});
+</script>
+{% endblock %}

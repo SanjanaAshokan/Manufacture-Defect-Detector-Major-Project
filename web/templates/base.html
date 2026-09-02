@@ -33,8 +33,10 @@
             <ul class="nav-links" id="navLinks">
                 <li><a href="/" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">Home</a></li>
                 <li><a href="/detect" class="nav-link {% if request.endpoint == 'detect' %}active{% endif %}">Detect</a></li>
+                <li><a href="/realtime" class="nav-link {% if request.endpoint == 'realtime' %}active{% endif %}">Live Camera</a></li>
                 <li><a href="/dashboard" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a></li>
                 <li><a href="/about" class="nav-link {% if request.endpoint == 'about' %}active{% endif %}">About</a></li>
+                <li><button class="theme-toggle" id="themeToggle" aria-label="Toggle theme"><span class="theme-toggle-icon"></span></button></li>
             </ul>
         </div>
     </nav>
@@ -88,6 +90,21 @@
     </footer>
 
     <!-- JavaScript -->
+    <script>
+        const themeToggle = document.getElementById('themeToggle');
+        const currentTheme = localStorage.getItem('theme');
+        if (currentTheme === 'light') {
+            document.body.classList.add('light-theme');
+        }
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('light-theme');
+            let theme = 'dark';
+            if (document.body.classList.contains('light-theme')) {
+                theme = 'light';
+            }
+            localStorage.setItem('theme', theme);
+        });
+    </script>
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>

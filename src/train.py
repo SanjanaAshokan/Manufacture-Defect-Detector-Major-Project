@@ -123,6 +123,32 @@ def validate(
     return {"loss": loss_meter.avg, "accuracy": accuracy}
 
 
+
+import torch.nn.functional as F
+
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super().__init__()
+        self.alpha = alpha  # List of weights [weight_good, weight_defective]
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = (1 - pt) ** self.gamma * ce_loss
+        
+        if self.alpha is not None:
+            alpha_tensor = torch.tensor(self.alpha, device=inputs.device)
+            at = alpha_tensor.gather(0, targets.data.view(-1))
+            focal_loss = focal_loss * at
+            
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        return focal_loss
+
 def train(config: dict):
     """Main training function."""
 
@@ -175,33 +201,42 @@ def train(config: dict):
         dropout=config["model"]["dropout"],
         hidden_dim=config["model"]["hidden_dim"],
         pretrained=config["model"]["pretrained"],
-        freeze_backbone=config["model"].get("freeze_backbone", True),
+        freeze_backbone=False,
     )
     model = model.to(device)
 
     # ---- Loss ----
-    # If using weighted sampler (default in get_dataloaders), we don't need class weights in loss
-    # using both double-corrects class imbalance and degrades performance
+    # Respect the config: if we use a WeightedRandomSampler to balance batches,
+    # applying a weighted loss on top of it double-corrects and severely hurts precision.
     if use_weighted_sampler:
         criterion = nn.CrossEntropyLoss()
-        print("\n[Loss] Standard CrossEntropy (data is balanced via sampler)")
+        print("\n[Loss] Using plain CrossEntropyLoss (imbalance handled by Sampler)")
     else:
-        train_dataset = dataloaders["train"].dataset
-        class_weights = train_dataset.get_class_weights().to(device)
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
-        print(f"\n[Loss] Weighted CrossEntropy — weights: {class_weights.cpu().numpy()}")
+        # Give higher weight to the minority class (defective: 1)
+        # Class ratio is roughly 171 (good) / 24 (defective) ~ 7
+        alpha_weights = [1.0, 7.0]
+        criterion = FocalLoss(alpha=alpha_weights, gamma=2.0)
+        print(f"\n[Loss] FocalLoss (gamma=2.0, alpha={alpha_weights}) to heavily penalize False Negatives")
 
     # ---- Optimizer ----
-    optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=lr,
-        weight_decay=weight_decay,
-    )
+    # Use discriminative learning rates instead of freezing/unfreezing
+    backbone_params = []
+    classifier_params = []
+    for name, param in model.named_parameters():
+        if "classifier" in name or "fc" in name:
+            classifier_params.append(param)
+        else:
+            backbone_params.append(param)
+            
+    optimizer = torch.optim.AdamW([
+        {"params": backbone_params, "lr": lr * 0.1},
+        {"params": classifier_params, "lr": lr}
+    ], weight_decay=weight_decay)
 
     # ---- Scheduler ----
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
-        max_lr=lr,
+        max_lr=[lr * 0.1, lr],
         epochs=epochs,
         steps_per_epoch=len(dataloaders["train"]),
         pct_start=0.1,
@@ -217,11 +252,11 @@ def train(config: dict):
         early_stopping = EarlyStopping(
             patience=config["training"]["early_stopping"]["patience"],
             min_delta=config["training"]["early_stopping"]["min_delta"],
-            mode="max",
+            mode="min",
         )
 
     # ---- Training Loop ----
-    best_val_acc = 0.0
+    best_val_loss = float("inf")
     best_epoch = 0
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": [], "lr": []}
 
@@ -232,25 +267,6 @@ def train(config: dict):
 
     for epoch in range(1, epochs + 1):
         epoch_start = time.time()
-
-        # Unfreeze backbone after warmup
-        if epoch == warmup_epochs + 1 and config["model"].get("freeze_backbone", True):
-            print(f"\n[Epoch {epoch}] Unfreezing backbone for full fine-tuning")
-            model.unfreeze_backbone()
-            # Recreate optimizer with all parameters
-            optimizer = torch.optim.AdamW(
-                model.parameters(),
-                lr=lr * 0.1,  # Lower LR for fine-tuning
-                weight_decay=weight_decay,
-            )
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=lr * 0.1,
-                epochs=epochs - warmup_epochs,
-                steps_per_epoch=len(dataloaders["train"]),
-                pct_start=0.1,
-                anneal_strategy="cos",
-            )
 
         print(f"\nEpoch {epoch}/{epochs}")
         current_lr = optimizer.param_groups[0]["lr"]
@@ -291,8 +307,8 @@ def train(config: dict):
         history["lr"].append(current_lr)
 
         # Save best model
-        if val_metrics["accuracy"] > best_val_acc:
-            best_val_acc = val_metrics["accuracy"]
+        if val_metrics["loss"] < best_val_loss:
+            best_val_loss = val_metrics["loss"]
             best_epoch = epoch
             save_checkpoint(
                 model, optimizer, epoch,
@@ -300,11 +316,11 @@ def train(config: dict):
                 path=str(checkpoint_dir / f"best_{architecture}.pth"),
                 architecture=architecture,
             )
-            print(f"  * New best model! Val Acc: {best_val_acc:.4f}")
+            print(f"  * New best model! Val Loss: {best_val_loss:.4f}")
 
         # Early stopping
         if early_stopping:
-            if early_stopping(val_metrics["accuracy"]):
+            if early_stopping(val_metrics["loss"]):
                 print(f"\n[Early Stopping] No improvement for {early_stopping.patience} epochs. Stopping.")
                 break
 
@@ -324,7 +340,7 @@ def train(config: dict):
     print("=" * 60)
     print(f"  Total time:       {format_time(total_time)}")
     print(f"  Best epoch:       {best_epoch}")
-    print(f"  Best val accuracy: {best_val_acc:.4f} ({best_val_acc * 100:.1f}%)")
+    print(f"  Best val loss:    {best_val_loss:.4f}")
     print(f"  Best checkpoint:  {checkpoint_dir / f'best_{architecture}.pth'}")
     print(f"  Last checkpoint:  {checkpoint_dir / f'last_{architecture}.pth'}")
     print("=" * 60)

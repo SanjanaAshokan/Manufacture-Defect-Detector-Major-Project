@@ -123,10 +123,9 @@ def main():
     print(f"  ECE before scaling: {ece_before:.4f}")
     print(f"  ECE after scaling:  {ece_after:.4f}")
     if ece_after < ece_before:
-        print("  → Calibration improved. Confidence values will better match real accuracy.")
+        print("  -> Calibration improved. Confidence values will better match real accuracy.")
     else:
-        print("  → No improvement found; the model's confidence was already well-calibrated,")
-        print("    or the validation set is too small for a reliable fit.")
+        print("  -> Calibration made things worse or had no effect. Using temperature = 1.0.")
 
     # Save alongside the checkpoint so the web app / evaluate.py can pick it up.
     calib_path = Path(config["evaluation"]["plots_dir"]) / f"calibration_{architecture}.json"
