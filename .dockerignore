@@ -1,0 +1,9 @@
+.git
+__pycache__
+*.pyc
+venv
+.venv
+data/mvtec_transistor
+data/processed
+outputs/logs
+*.zip
