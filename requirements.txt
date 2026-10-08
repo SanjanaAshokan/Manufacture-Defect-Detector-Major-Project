@@ -30,3 +30,6 @@ tensorboard>=2.14.0
 
 # Dataset Download
 requests>=2.31.0
+
+#huggingface_hub for model management
+huggingface_hub>=0.23

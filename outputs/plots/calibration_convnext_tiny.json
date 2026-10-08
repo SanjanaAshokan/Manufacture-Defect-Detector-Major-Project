@@ -1,0 +1,8 @@
+{
+  "architecture": "convnext_tiny",
+  "checkpoint": "outputs\\checkpoints\\best_convnext_tiny.pth",
+  "checkpoint_epoch": 17,
+  "temperature": 0.9387400150299072,
+  "ece_before": 0.786,
+  "ece_after": 0.7938
+}

@@ -1,0 +1,191 @@
+{
+  "architecture": "convnext_tiny",
+  "metrics": {
+    "accuracy": 0.8088235294117647,
+    "precision": 0.35294117647058826,
+    "recall": 0.75,
+    "f1_score": 0.48,
+    "roc_auc": 0.90625,
+    "avg_precision": 0.7238227513227513
+  },
+  "per_class_report": {
+    "Good": {
+      "precision": 0.9607843137254902,
+      "recall": 0.8166666666666667,
+      "f1-score": 0.8828828828828829,
+      "support": 60.0
+    },
+    "Defective": {
+      "precision": 0.35294117647058826,
+      "recall": 0.75,
+      "f1-score": 0.48,
+      "support": 8.0
+    },
+    "accuracy": 0.8088235294117647,
+    "macro avg": {
+      "precision": 0.6568627450980392,
+      "recall": 0.7833333333333333,
+      "f1-score": 0.6814414414414414,
+      "support": 68.0
+    },
+    "weighted avg": {
+      "precision": 0.889273356401384,
+      "recall": 0.8088235294117647,
+      "f1-score": 0.8354848966613673,
+      "support": 68.0
+    }
+  },
+  "defect_type_breakdown": {
+    "bent_lead": {
+      "support": 3,
+      "correct": 1,
+      "recall": 0.3333
+    },
+    "cut_lead": {
+      "support": 2,
+      "correct": 2,
+      "recall": 1.0
+    },
+    "damaged_case": {
+      "support": 1,
+      "correct": 1,
+      "recall": 1.0
+    },
+    "misplaced": {
+      "support": 2,
+      "correct": 2,
+      "recall": 1.0
+    }
+  },
+  "calibration": {
+    "ece": 0.6998,
+    "bins": [
+      {
+        "range": "0.0-0.1",
+        "count": 19,
+        "avg_confidence": 0.0671,
+        "avg_accuracy": 1.0
+      },
+      {
+        "range": "0.1-0.2",
+        "count": 15,
+        "avg_confidence": 0.1439,
+        "avg_accuracy": 1.0
+      },
+      {
+        "range": "0.2-0.3",
+        "count": 9,
+        "avg_confidence": 0.2377,
+        "avg_accuracy": 0.8889
+      },
+      {
+        "range": "0.3-0.4",
+        "count": 3,
+        "avg_confidence": 0.3316,
+        "avg_accuracy": 0.6667
+      },
+      {
+        "range": "0.4-0.5",
+        "count": 5,
+        "avg_confidence": 0.447,
+        "avg_accuracy": 1.0
+      },
+      {
+        "range": "0.5-0.6",
+        "count": 4,
+        "avg_confidence": 0.5584,
+        "avg_accuracy": 0.0
+      },
+      {
+        "range": "0.6-0.7",
+        "count": 2,
+        "avg_confidence": 0.6597,
+        "avg_accuracy": 0.5
+      },
+      {
+        "range": "0.7-0.8",
+        "count": 2,
+        "avg_confidence": 0.7451,
+        "avg_accuracy": 0.0
+      },
+      {
+        "range": "0.8-0.9",
+        "count": 3,
+        "avg_confidence": 0.8362,
+        "avg_accuracy": 0.3333
+      },
+      {
+        "range": "0.9-1.0",
+        "count": 6,
+        "avg_confidence": 0.9723,
+        "avg_accuracy": 0.6667
+      }
+    ]
+  },
+  "threshold_analysis": [
+    {
+      "threshold": 0.3,
+      "precision": 0.28,
+      "recall": 0.875,
+      "f1_score": 0.4242,
+      "accuracy": 0.7206
+    },
+    {
+      "threshold": 0.4,
+      "precision": 0.2727,
+      "recall": 0.75,
+      "f1_score": 0.4,
+      "accuracy": 0.7353
+    },
+    {
+      "threshold": 0.5,
+      "precision": 0.3529,
+      "recall": 0.75,
+      "f1_score": 0.48,
+      "accuracy": 0.8088
+    },
+    {
+      "threshold": 0.6,
+      "precision": 0.4615,
+      "recall": 0.75,
+      "f1_score": 0.5714,
+      "accuracy": 0.8676
+    },
+    {
+      "threshold": 0.7,
+      "precision": 0.4545,
+      "recall": 0.625,
+      "f1_score": 0.5263,
+      "accuracy": 0.8676
+    },
+    {
+      "threshold": 0.8,
+      "precision": 0.5556,
+      "recall": 0.625,
+      "f1_score": 0.5882,
+      "accuracy": 0.8971
+    },
+    {
+      "threshold": 0.9,
+      "precision": 0.6667,
+      "recall": 0.5,
+      "f1_score": 0.5714,
+      "accuracy": 0.9118
+    },
+    {
+      "threshold": 0.95,
+      "precision": 0.6667,
+      "recall": 0.5,
+      "f1_score": 0.5714,
+      "accuracy": 0.9118
+    }
+  ],
+  "checkpoint": "outputs\\checkpoints\\best_convnext_tiny.pth",
+  "checkpoint_epoch": 17,
+  "evaluated_at": "2026-09-02T05:39:25.824684+00:00",
+  "num_test_samples": 68,
+  "test_class_counts": {
+    "good": 60,
+    "defective": 8
+  }
+}

@@ -1,3 +1,11 @@
+---
+title: Transistor Defect Detector
+emoji: 🔬
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
 # 🔬 Transistor Defect Detector
 
 An end-to-end, production-ready quality control inspection system for transistors. The system uses transfer learning with fine-tuned **EfficientNet-B0** and **ResNet-50** classifiers combined with **Grad-CAM (Gradient-weighted Class Activation Mapping)** for explainable anomaly localization. 

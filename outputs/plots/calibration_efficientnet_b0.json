@@ -1,0 +1,8 @@
+{
+  "architecture": "efficientnet_b0",
+  "checkpoint": "outputs\\checkpoints\\best_efficientnet_b0.pth",
+  "checkpoint_epoch": 1,
+  "temperature": 1.4299086332321167,
+  "ece_before": 0.3979,
+  "ece_after": 0.3806
+}
