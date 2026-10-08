@@ -58,7 +58,7 @@
     }
   },
   "calibration": {
-    "ece": 0.6998,
+    "ece": 0.6997,
     "bins": [
       {
         "range": "0.0-0.1",
@@ -69,49 +69,49 @@
       {
         "range": "0.1-0.2",
         "count": 15,
-        "avg_confidence": 0.1439,
+        "avg_confidence": 0.144,
         "avg_accuracy": 1.0
       },
       {
         "range": "0.2-0.3",
         "count": 9,
-        "avg_confidence": 0.2377,
+        "avg_confidence": 0.2379,
         "avg_accuracy": 0.8889
       },
       {
         "range": "0.3-0.4",
         "count": 3,
-        "avg_confidence": 0.3316,
+        "avg_confidence": 0.332,
         "avg_accuracy": 0.6667
       },
       {
         "range": "0.4-0.5",
         "count": 5,
-        "avg_confidence": 0.447,
+        "avg_confidence": 0.4474,
         "avg_accuracy": 1.0
       },
       {
         "range": "0.5-0.6",
         "count": 4,
-        "avg_confidence": 0.5584,
+        "avg_confidence": 0.559,
         "avg_accuracy": 0.0
       },
       {
         "range": "0.6-0.7",
         "count": 2,
-        "avg_confidence": 0.6597,
+        "avg_confidence": 0.66,
         "avg_accuracy": 0.5
       },
       {
         "range": "0.7-0.8",
         "count": 2,
-        "avg_confidence": 0.7451,
+        "avg_confidence": 0.7452,
         "avg_accuracy": 0.0
       },
       {
         "range": "0.8-0.9",
         "count": 3,
-        "avg_confidence": 0.8362,
+        "avg_confidence": 0.8364,
         "avg_accuracy": 0.3333
       },
       {
@@ -182,7 +182,7 @@
   ],
   "checkpoint": "outputs\\checkpoints\\best_convnext_tiny.pth",
   "checkpoint_epoch": 17,
-  "evaluated_at": "2026-09-02T05:39:25.824684+00:00",
+  "evaluated_at": "2026-10-08T09:55:04.574976+00:00",
   "num_test_samples": 68,
   "test_class_counts": {
     "good": 60,

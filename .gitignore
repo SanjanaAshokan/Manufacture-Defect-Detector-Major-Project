@@ -34,6 +34,7 @@ data/*.zip
 # ----- Outputs -----
 outputs/checkpoints/*.pth
 outputs/checkpoints/*.pt
+!outputs/checkpoints/best_convnext_tiny.pth
 outputs/logs/
 outputs/plots/*
 !outputs/plots/*.png
@@ -49,3 +50,6 @@ desktop.ini
 *.log
 *.tmp
 .ipynb_checkpoints/
+
+
+slim/
