@@ -35,7 +35,9 @@ data/*.zip
 outputs/checkpoints/*.pth
 outputs/checkpoints/*.pt
 outputs/logs/
-outputs/plots/
+outputs/plots/*
+!outputs/plots/*.png
+!outputs/plots/*.json
 outputs/gradcam_samples/
 
 # ----- OS -----
