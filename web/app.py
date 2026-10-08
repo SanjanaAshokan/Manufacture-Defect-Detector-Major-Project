@@ -79,6 +79,19 @@ def get_or_load_model(architecture: str):
 
     # Try to load checkpoint
     checkpoint_path = PROJECT_ROOT / CONFIG["training"]["checkpoint_dir"] / f"best_{architecture}.pth"
+    if not checkpoint_path.exists():
+        repo_id = os.environ.get("HF_MODEL_REPO")
+        if repo_id:
+            try:
+                from huggingface_hub import hf_hub_download
+                hf_hub_download(
+                    repo_id=repo_id,
+                    filename=f"best_{architecture}.pth",
+                    local_dir=str(checkpoint_path.parent),
+                    token=os.environ.get("HF_TOKEN"),
+                )
+            except Exception as e:
+                print(f"[Web] Could not download weights from {repo_id}: {e}")
     if checkpoint_path.exists():
         checkpoint = load_checkpoint(model, str(checkpoint_path), DEVICE)
         print(f"[Web] Loaded trained checkpoint for {architecture}")
