@@ -21,6 +21,8 @@ from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 from pytorch_grad_cam.utils.image import show_cam_on_image
 
+from src.orientation import auto_orient as _auto_orient
+
 
 # ImageNet normalization stats
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406])
@@ -153,6 +155,8 @@ def predict_with_gradcam(
     image_size: int = 224,
     class_names: list = None,
     temperature: float = 1.0,
+    auto_orient: bool = True,
+    with_gradcam: bool = True,
 ) -> dict:
     """
     Run inference and generate Grad-CAM visualization.
@@ -168,6 +172,11 @@ def predict_with_gradcam(
             Dividing logits by a fitted temperature > 1 corrects overconfident
             softmax outputs so the displayed percentage matches real accuracy.
             Leave at 1.0 (no-op) if no calibration has been fit yet.
+        auto_orient: Rotate sideways / upside-down transistors upright (leads down)
+            before inference — the orientation all models were trained on. Upright
+            images are passed through untouched. See src/orientation.py.
+        with_gradcam: Set False for fast screening (batch / live scanning): skips the
+            Grad-CAM pass; "heatmap", "overlay" and "heatmap_raw" come back as None.
     
     Returns:
         Dictionary with prediction results and visualizations.
@@ -176,6 +185,12 @@ def predict_with_gradcam(
         class_names = ["good", "defective"]
 
     model.eval()
+
+    # Make horizontal / upside-down transistors upright (no-op for upright images)
+    orientation = {"applied": False, "rotation_deg": 0, "leads_pointing": None,
+                   "confidence": 0.0, "reason": "auto-orient disabled"}
+    if auto_orient:
+        image, orientation = _auto_orient(image)
 
     # Preprocess
     input_tensor, rgb_image = preprocess_image(image, image_size)
@@ -191,16 +206,18 @@ def predict_with_gradcam(
     confidence_score = confidence.item()
     all_probs = probabilities[0].cpu().numpy()
 
-    # Generate Grad-CAM for predicted class
-    heatmap = generate_gradcam(model, input_tensor, target_layer, predicted_class, device)
+    heatmap = overlay_pil = heatmap_pil = None
+    if with_gradcam:
+        # Generate Grad-CAM for predicted class
+        heatmap = generate_gradcam(model, input_tensor, target_layer, predicted_class, device)
 
-    # Create visualizations
-    overlay = create_gradcam_overlay(rgb_image, heatmap)
-    colored_heatmap = create_colored_heatmap(heatmap)
+        # Create visualizations
+        overlay = create_gradcam_overlay(rgb_image, heatmap)
+        colored_heatmap = create_colored_heatmap(heatmap)
 
-    # Convert to PIL for easy display / encoding
-    overlay_pil = Image.fromarray(overlay)
-    heatmap_pil = Image.fromarray(colored_heatmap)
+        # Convert to PIL for easy display / encoding
+        overlay_pil = Image.fromarray(overlay)
+        heatmap_pil = Image.fromarray(colored_heatmap)
     original_pil = Image.fromarray((rgb_image * 255).astype(np.uint8))
 
     return {
@@ -212,6 +229,7 @@ def predict_with_gradcam(
         "heatmap": heatmap_pil,
         "overlay": overlay_pil,
         "heatmap_raw": heatmap,
+        "orientation": orientation,
     }
 
 

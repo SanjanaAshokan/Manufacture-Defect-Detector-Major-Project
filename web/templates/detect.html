@@ -20,16 +20,20 @@
                     <div class="control-group">
                         <label for="modelSelect">Model</label>
                         <select id="modelSelect" class="form-select">
-                            <option value="efficientnet_b0">EfficientNet-B0 (100% Recall)</option>
-                            <option value="convnext_tiny" selected>ConvNeXt-Tiny (Balanced - Default)</option>
-                            <option value="resnet50">ResNet-50 (Aggressive)</option>
+                            {% include "_model_options.html" %}
                         </select>
                     </div>
                     <div class="control-group">
                         <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.65</span></label>
                         <input type="range" id="thresholdSlider" min="0.01" max="0.99" step="0.01" value="0.65" class="form-range">
                     </div>
+                    <label class="checkbox-row" for="autoOrientToggle">
+                        <input type="checkbox" id="autoOrientToggle" checked>
+                        <span>Auto-orient sideways transistors<br><span class="tool-note">Rotates horizontal / upside-down parts upright before analysis. Turn off if a rotated part should itself count as a placement defect.</span></span>
+                    </label>
                 </div>
+
+                <div class="model-warning" id="modelWarning">⚠ This architecture has no trained checkpoint on this server — its results would be meaningless, so use the default model.</div>
 
                 {% if not model_status.trained %}
                 <div class="detect-status-banner" id="modelStatusNote">
@@ -112,6 +116,22 @@
                         ⚠ Low margin — this prediction is close to the decision threshold and may not be reliable. Consider manual review.
                     </div>
 
+                    <div class="model-warning" id="oodWarning" style="display:none;"></div>
+
+                    <!-- Orientation Doctor: what the system did about the part's orientation -->
+                    <div class="orientation-card" id="orientationCard" style="display:none;">
+                        <h4>🧭 Orientation check <button class="btn btn-ghost btn-sm" id="orientReplay" type="button">↻ Replay</button></h4>
+                        <div class="orient-stage">
+                            <div class="orient-wrap" id="orientWrap">
+                                <img id="orientImg" alt="Uploaded image">
+                                <div class="orient-box" id="orientBodyBox" style="display:none;"></div>
+                                <div class="orient-box leads" id="orientLeadBox" style="display:none;"></div>
+                            </div>
+                        </div>
+                        <div class="orient-legend"><span><i></i>Detected body</span><span><i class="leads"></i>Where the leads point</span></div>
+                        <p class="orient-text" id="orientText"></p>
+                    </div>
+
                     <!-- Confidence Bar -->
                     <div class="confidence-section">
                         <div class="confidence-header">
@@ -150,8 +170,16 @@
                         </div>
                         <div class="gradcam-display">
                             <img id="gradcamImage" src="" alt="Grad-CAM Visualization" class="gradcam-img">
+                            <div class="diag-box" id="diagBox"></div>
                         </div>
                         <p class="gradcam-caption">Grad-CAM highlights the regions most influential in the model's decision.</p>
+                    </div>
+
+                    <!-- Suspected defect diagnosis (only for defective verdicts) -->
+                    <div class="diagnosis-card" id="diagnosisCard" style="display:none;">
+                        <h4>🔎 Suspected defect <span class="pill warn">heuristic</span></h4>
+                        <p class="diag-title" id="diagTitle"></p>
+                        <p class="tool-note" id="diagNote"></p>
                     </div>
 
                     <!-- Meta Info -->
@@ -171,7 +199,10 @@
                 <div class="results-error" id="resultsError" style="display:none;">
                     <div class="error-icon">⚠</div>
                     <p class="error-message" id="errorMessage">An error occurred.</p>
-                    <button class="btn btn-ghost btn-sm" id="retryBtn" type="button">Retry</button>
+                    <div class="tool-row" style="justify-content:center;">
+                        <button class="btn btn-ghost btn-sm" id="retryBtn" type="button">Retry</button>
+                        <button class="btn btn-ghost btn-sm" id="analyzeAnywayBtn" type="button" style="display:none;">Analyse anyway</button>
+                    </div>
                 </div>
             </div>
             

@@ -1,0 +1,3 @@
+{# Model <option> list built from the checkpoints that really exist (see app.py). #}
+{% for a in architectures %}<option value="{{ a.id }}" data-trained="{{ 'true' if a.available else 'false' }}"{% if a.default %} selected{% endif %}>{{ a.option_text }}</option>
+{% endfor %}

@@ -1,0 +1,233 @@
+{% extends "base.html" %}
+{% block title %}Line Simulator — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="tool-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Simulator</span>
+            <h1 class="section-title">Production-Line Simulator</h1>
+            <p class="section-subtitle">Parts roll down a simulated line and are inspected by the real model. A control chart watches the defect rate and raises an alert when it spikes.</p>
+        </div>
+
+        <div class="tool-grid">
+            <div class="glass-card detect-panel">
+                <h3 class="panel-title">Line controls</h3>
+                <div class="tool-stack">
+                    <div class="tool-row">
+                        <button class="btn btn-primary" id="startBtn">▶ Start line</button>
+                        <button class="btn btn-ghost" id="burstBtn" type="button">⚡ Inject fault burst</button>
+                        <button class="btn btn-ghost" id="resetBtn" type="button">↺ Reset</button>
+                    </div>
+                    <div class="slider-row" style="grid-template-columns: 110px 1fr 64px;"><label for="speed">Part interval</label><input type="range" id="speed" min="300" max="2500" step="100" value="800" class="form-range"><span id="speedV">0.8 s</span></div>
+                    <div class="control-group">
+                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.65</span></label>
+                        <input type="range" id="thresholdSlider" min="0.01" max="0.99" step="0.01" value="0.65" class="form-range">
+                    </div>
+                    <div class="control-group">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect" class="form-select">{% include "_model_options.html" %}</select>
+                        <div class="model-warning" id="modelWarning">⚠ This architecture has no trained checkpoint on this server — results would be meaningless.</div>
+                    </div>
+                    <label class="checkbox-row" for="sidewaysToggle"><input type="checkbox" id="sidewaysToggle" checked><span>Some parts arrive sideways (~25%)</span></label>
+                    <label class="checkbox-row" for="autoOrientToggle"><input type="checkbox" id="autoOrientToggle" checked><span>Auto-orient sideways transistors<br><span class="tool-note">Untick it to watch sideways parts wreck the yield.</span></span></label>
+                    <p class="tool-note">This is a <strong>simulation</strong>: parts are replayed from the bundled example images (ground truth comes from their file names), not a live camera. The first 5 batches of 10 set the baseline for the control limits.</p>
+                </div>
+            </div>
+
+            <div class="tool-stack">
+                <div class="glass-card detect-panel">
+                    <div class="kpi-grid" style="margin-bottom:12px;">
+                        <div class="kpi"><b id="kInspected">0</b><span>Inspected</span></div>
+                        <div class="kpi good"><b id="kYield">—</b><span>Yield</span></div>
+                        <div class="kpi bad"><b id="kFlagged">0</b><span>Flagged</span></div>
+                        <div class="kpi"><b id="kEscapes">0</b><span>Defects passed as good</span></div>
+                        <div class="kpi"><b id="kFalse">0</b><span>False alarms</span></div>
+                        <div class="kpi bad"><b id="kAlerts">0</b><span>Alerts</span></div>
+                    </div>
+                    <div class="belt" id="belt" aria-label="Recently inspected parts"></div>
+                </div>
+                <div class="glass-card detect-panel">
+                    <h3 class="panel-title">Defect-rate control chart (batches of 10)</h3>
+                    <div class="chart-box"><canvas id="chart"></canvas></div>
+                    <p class="tool-note" style="margin-top:8px;" id="chartNote">Collecting baseline…</p>
+                </div>
+                <div class="glass-card detect-panel">
+                    <h3 class="panel-title">Alerts</h3>
+                    <div class="alert-feed" id="alerts"><p class="tool-note">No alerts yet.</p></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/tools.js') }}"></script>
+<script>
+(function () {
+    const T = window.DefectTools;
+    const $ = (id) => document.getElementById(id);
+    const EXAMPLES = {{ examples|tojson }};
+    const GOOD = EXAMPLES.filter((n) => /good/i.test(n));
+    const BAD = EXAMPLES.filter((n) => /defective/i.test(n));
+    const GROUP = 10, BASELINE_GROUPS = 5, BELT_MAX = 12;
+    const imgCache = {};
+    const work = document.createElement('canvas'); work.width = work.height = 320;
+    const wctx = work.getContext('2d');
+    const modelSelect = $('modelSelect'), slider = $('thresholdSlider'), speed = $('speed');
+
+    let running = false, timer = null, burst = 0, busy = false;
+    let st, points, baseline, above, alertLog;
+    function resetState() {
+        st = { n: 0, flagged: 0, escapes: 0, falseAlarms: 0, alerts: 0, group: { n: 0, d: 0 } };
+        points = []; baseline = null; above = 0; alertLog = [];
+        $('belt').innerHTML = ''; $('alerts').innerHTML = '<p class="tool-note">No alerts yet.</p>';
+        $('chartNote').textContent = 'Collecting baseline…';
+        draw(); kpis();
+    }
+
+    function syncModelWarning() {
+        const opt = modelSelect.options[modelSelect.selectedIndex];
+        $('modelWarning').classList.toggle('show', !!opt && opt.dataset.trained === 'false');
+    }
+    modelSelect.addEventListener('change', syncModelWarning); syncModelWarning();
+    slider.addEventListener('input', () => { $('thresholdValue').textContent = parseFloat(slider.value).toFixed(2); });
+    speed.addEventListener('input', () => { $('speedV').textContent = (speed.value / 1000).toFixed(1) + ' s'; });
+
+    function kpis() {
+        $('kInspected').textContent = st.n;
+        $('kYield').textContent = st.n ? Math.round(((st.n - st.flagged) / st.n) * 1000) / 10 + '%' : '—';
+        $('kFlagged').textContent = st.flagged;
+        $('kEscapes').textContent = st.escapes;
+        $('kFalse').textContent = st.falseAlarms;
+        $('kAlerts').textContent = st.alerts;
+    }
+
+    function limits() {
+        if (!baseline) return null;
+        const p = baseline, sd = Math.sqrt((p * (1 - p)) / GROUP);
+        return { center: p, ucl: Math.min(1, p + 3 * sd), lcl: Math.max(0, p - 3 * sd) };
+    }
+
+    function draw() {
+        const L = limits();
+        const vals = points.map((p) => p.rate);
+        const colors = points.map((p) => (p.violation ? '#ef4444' : null));
+        const h = [];
+        if (L) {
+            h.push({ y: L.center, label: 'centre', color: '#10b981', solid: true });
+            h.push({ y: L.ucl, label: 'UCL', color: '#ef4444' });
+            if (L.lcl > 0) h.push({ y: L.lcl, label: 'LCL', color: '#ef4444' });
+        }
+        const n = Math.max(points.length, 8);
+        const labels = []; for (let i = 0; i < n; i++) labels.push('#' + (i + 1));
+        const padded = vals.concat(new Array(n - vals.length).fill(null));
+        T.lineChart($('chart'), [{ label: 'Flagged rate per batch', color: '#00d4ff', values: padded }],
+            { xLabels: labels, yMin: 0, yMax: 1, yFormat: (v) => Math.round(v * 100) + '%', hLines: h, pointColors: [colors] });
+    }
+
+    function raise(msg, info) {
+        if (!info) st.alerts++;
+        if (!alertLog.length) $('alerts').innerHTML = '';
+        alertLog.push(msg);
+        const div = document.createElement('div');
+        div.className = 'alert-item' + (info ? ' info' : '');
+        div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+        $('alerts').prepend(div);
+        kpis();
+    }
+
+    function closeGroup() {
+        const rate = st.group.d / GROUP;
+        const pt = { rate: rate, violation: false };
+        points.push(pt);
+        st.group = { n: 0, d: 0 };
+        if (!baseline && points.length === BASELINE_GROUPS) {
+            const pooled = points.reduce((a, p) => a + p.rate, 0) / points.length;
+            baseline = Math.max(pooled, 0.02);
+            $('chartNote').textContent = 'Baseline set from the first 5 batches — now monitoring.';
+            raise('Baseline established: ' + (baseline * 100).toFixed(1) + '% flagged per batch.', true);
+        } else if (baseline) {
+            const L = limits();
+            if (rate > L.ucl) {
+                pt.violation = true; above++;
+                raise(`Defect rate ${(rate * 100).toFixed(0)}% exceeded the upper control limit (${(L.ucl * 100).toFixed(0)}%). Check the line.`);
+            } else if (rate > L.center) { above++; } else { above = 0; }
+            if (above === 4) { pt.violation = true; raise('Four consecutive batches above the centre line — the process is drifting.'); }
+        }
+        draw();
+    }
+
+    async function getImage(name) {
+        if (!imgCache[name]) imgCache[name] = await T.loadImage('/examples/' + name);
+        return imgCache[name];
+    }
+
+    function addToBelt(blob, verdictBad) {
+        const url = URL.createObjectURL(blob);
+        const d = document.createElement('div');
+        d.className = 'belt-item ' + (verdictBad ? 'bad' : 'good');
+        d.innerHTML = '<img alt="">'; d.firstChild.src = url;
+        $('belt').prepend(d);
+        while ($('belt').children.length > BELT_MAX) {
+            const last = $('belt').lastChild; const im = last.querySelector('img');
+            if (im && im.src.startsWith('blob:')) URL.revokeObjectURL(im.src);
+            last.remove();
+        }
+    }
+
+    async function tick() {
+        if (!running || busy) return;
+        busy = true;
+        try {
+            const pBad = burst > 0 ? 0.85 : 0.12;
+            if (burst > 0) burst--;
+            const truthBad = Math.random() < pBad;
+            let pool = truthBad ? BAD : GOOD; if (!pool.length) pool = EXAMPLES;
+            if (!pool.length) { raise('No example images available to simulate.', true); stop(); return; }
+            const name = pool[Math.floor(Math.random() * pool.length)];
+            const img = await getImage(name);
+            const sideways = $('sidewaysToggle').checked && Math.random() < 0.25;
+            const angle = sideways ? [90, 180, 270][Math.floor(Math.random() * 3)] : 0;
+
+            wctx.setTransform(1, 0, 0, 1, 0, 0);
+            wctx.fillStyle = '#946454'; wctx.fillRect(0, 0, 320, 320);
+            wctx.translate(160, 160); wctx.rotate((angle * Math.PI) / 180);
+            const s = 320 / Math.max(img.width, img.height);
+            wctx.drawImage(img, (-img.width * s) / 2, (-img.height * s) / 2, img.width * s, img.height * s);
+            const blob = await new Promise((r) => work.toBlob(r, 'image/png'));
+
+            const r = await T.postImage('/api/predict', blob, 'part.png', {
+                architecture: modelSelect.value, threshold: slider.value, gradcam: 'false', bypass_ood: 'true',
+                auto_orient: $('autoOrientToggle').checked ? 'true' : 'false'
+            });
+            if (!running) return;
+            if (!r.ok) { raise('Inspection error: ' + (r.data.error || 'request failed'), true); stop(); return; }
+
+            const flagged = !!r.data.is_defective;
+            st.n++; st.group.n++;
+            if (flagged) { st.flagged++; st.group.d++; }
+            if (truthBad && !flagged) st.escapes++;
+            if (!truthBad && flagged) st.falseAlarms++;
+            addToBelt(blob, flagged);
+            kpis();
+            if (st.group.n >= GROUP) closeGroup();
+        } catch (e) {
+            raise('Simulator error: ' + e.message, true); stop();
+        } finally {
+            busy = false;
+            if (running) timer = setTimeout(tick, +speed.value);
+        }
+    }
+
+    function start() { running = true; $('startBtn').textContent = '⏸ Pause line'; tick(); }
+    function stop() { running = false; clearTimeout(timer); $('startBtn').textContent = '▶ Start line'; }
+    $('startBtn').addEventListener('click', () => (running ? stop() : start()));
+    $('burstBtn').addEventListener('click', () => { burst = 20; raise('Fault burst injected: the next 20 parts are mostly defective.', true); if (!running) start(); });
+    $('resetBtn').addEventListener('click', () => { stop(); resetState(); });
+    window.addEventListener('resize', draw);
+    resetState();
+})();
+</script>
+{% endblock %}

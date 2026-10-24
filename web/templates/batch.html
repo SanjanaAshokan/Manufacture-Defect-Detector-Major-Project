@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title %}Batch Inspection — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="tool-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Batch</span>
+            <h1 class="section-title">Batch Inspection &amp; Report</h1>
+            <p class="section-subtitle">Upload up to {{ batch_max }} images (or a .zip of images) and get yield, a defect Pareto, a CSV export and a printable report.</p>
+        </div>
+
+        <div class="tool-grid">
+            <div class="glass-card detect-panel no-print">
+                <h3 class="panel-title">Inputs</h3>
+                <div class="tool-stack">
+                    <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Choose images">
+                        <p><strong>Drop images or a .zip here</strong></p>
+                        <p class="tool-note">or click to browse — PNG, JPG, BMP, TIFF (max {{ batch_max }} images)</p>
+                        <p class="pill" id="fileSummary" style="margin-top:10px;">No files selected</p>
+                    </div>
+                    <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.bmp,.tiff,.zip" multiple style="display:none;">
+
+                    <div class="control-group">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect" class="form-select">
+                            {% include "_model_options.html" %}
+                        </select>
+                        <div class="model-warning" id="modelWarning">⚠ This architecture has no trained checkpoint on this server — results would be meaningless.</div>
+                    </div>
+                    <div class="control-group">
+                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.65</span></label>
+                        <input type="range" id="thresholdSlider" min="0.01" max="0.99" step="0.01" value="0.65" class="form-range">
+                    </div>
+                    <label class="checkbox-row" for="autoOrientToggle">
+                        <input type="checkbox" id="autoOrientToggle" checked>
+                        <span>Auto-orient sideways transistors</span>
+                    </label>
+                    <button class="btn btn-primary btn-lg btn-block" id="runBtn" disabled>
+                        <span id="runLabel">Inspect batch</span>
+                    </button>
+                    <p class="tool-note" id="runStatus"></p>
+                </div>
+            </div>
+
+            <div class="glass-card detect-panel" id="reportPanel">
+                <h3 class="panel-title">Inspection report</h3>
+                <div id="emptyState"><p class="tool-note">Results appear here after you run a batch.</p></div>
+                <div id="report" style="display:none;">
+                    <p class="tool-note" id="reportMeta"></p>
+                    <div class="kpi-grid" id="kpis"></div>
+                    <div id="trainedWarning" class="model-warning"></div>
+                    <h4 style="margin:18px 0 6px;">Defect Pareto <span class="pill warn">suspected, heuristic</span></h4>
+                    <div id="pareto"></div>
+                    <div class="tool-row no-print" style="margin:18px 0 10px;">
+                        <button class="btn btn-ghost btn-sm" id="csvBtn" type="button">⬇ Download CSV</button>
+                        <button class="btn btn-ghost btn-sm" id="printBtn" type="button">🖨 Print / save as PDF</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="result-table">
+                            <thead><tr><th></th><th>File</th><th>Verdict</th><th>P(defective)</th><th>Suspected</th><th>Orientation</th></tr></thead>
+                            <tbody id="rows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/tools.js') }}"></script>
+<script>
+(function () {
+    const T = window.DefectTools;
+    const $ = (id) => document.getElementById(id);
+    const dropZone = $('dropZone'), fileInput = $('fileInput'), runBtn = $('runBtn');
+    const modelSelect = $('modelSelect'), modelWarning = $('modelWarning');
+    const slider = $('thresholdSlider'), sliderValue = $('thresholdValue');
+    let files = [];
+    let lastReport = null;
+
+    function syncModelWarning() {
+        const opt = modelSelect.options[modelSelect.selectedIndex];
+        modelWarning.classList.toggle('show', !!opt && opt.dataset.trained === 'false');
+    }
+    modelSelect.addEventListener('change', syncModelWarning); syncModelWarning();
+    slider.addEventListener('input', () => { sliderValue.textContent = parseFloat(slider.value).toFixed(2); });
+
+    function setFiles(list) {
+        files = Array.from(list);
+        const zips = files.filter((f) => /\.zip$/i.test(f.name)).length;
+        $('fileSummary').textContent = files.length
+            ? `${files.length} file${files.length === 1 ? '' : 's'} selected${zips ? ' (incl. ' + zips + ' zip)' : ''}`
+            : 'No files selected';
+        runBtn.disabled = files.length === 0;
+    }
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+    fileInput.addEventListener('change', () => setFiles(fileInput.files));
+    ['dragenter', 'dragover'].forEach((ev) => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drag'); }));
+    ['dragleave', 'drop'].forEach((ev) => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove('drag'); }));
+    dropZone.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files.length) setFiles(e.dataTransfer.files); });
+
+    const CHUNK = 5;            // files per request: keeps each call well under hosting time limits
+    const MAX_FILES = {{ batch_max }};
+
+    function summarize(rows, truncated) {
+        const ok = rows.filter((r) => r.status === 'ok');
+        const bad = ok.filter((r) => r.prediction === 'Defective');
+        const types = {};
+        bad.forEach((r) => { const k = r.suspected_label || 'Defect not localised'; types[k] = (types[k] || 0) + 1; });
+        return {
+            total: rows.length, analysed: ok.length, good: ok.length - bad.length, defective: bad.length,
+            rejected: rows.filter((r) => r.status === 'rejected').length,
+            errors: rows.filter((r) => r.status === 'error').length,
+            skipped: rows.filter((r) => r.status === 'skipped').length,
+            uncertain: ok.filter((r) => r.is_uncertain).length,
+            rotated: rows.filter((r) => r.rotated).length,
+            yield_pct: ok.length ? Math.round(1000 * (ok.length - bad.length) / ok.length) / 10 : null,
+            defect_types: Object.fromEntries(Object.entries(types).sort((a, b) => b[1] - a[1])),
+            truncated: truncated, max_images: MAX_FILES
+        };
+    }
+
+    runBtn.addEventListener('click', async () => {
+        // split into small requests (a zip travels alone)
+        let list = files.slice();
+        let truncated = false;
+        const plain = list.filter((f) => !/\.zip$/i.test(f.name));
+        if (plain.length > MAX_FILES) { truncated = true; const keep = new Set(plain.slice(0, MAX_FILES)); list = list.filter((f) => /\.zip$/i.test(f.name) || keep.has(f)); }
+        const chunks = []; let cur = [];
+        list.forEach((f) => {
+            if (/\.zip$/i.test(f.name)) { if (cur.length) { chunks.push(cur); cur = []; } chunks.push([f]); }
+            else { cur.push(f); if (cur.length === CHUNK) { chunks.push(cur); cur = []; } }
+        });
+        if (cur.length) chunks.push(cur);
+
+        runBtn.disabled = true; $('runLabel').textContent = 'Inspecting…';
+        const rows = []; let meta = null;
+        for (let i = 0; i < chunks.length; i++) {
+            $('runStatus').textContent = `Inspecting part ${i + 1} of ${chunks.length} — this can take a little while on CPU.`;
+            const fd = new FormData();
+            chunks[i].forEach((f) => fd.append('images', f, f.name));
+            fd.append('architecture', modelSelect.value);
+            fd.append('threshold', slider.value);
+            fd.append('auto_orient', $('autoOrientToggle').checked ? 'true' : 'false');
+            try {
+                const res = await fetch('/api/batch', { method: 'POST', body: fd });
+                const data = await res.json().catch(() => ({ error: 'Unexpected server response.' }));
+                if (!res.ok || !data.success) throw new Error(data.error || 'Batch failed.');
+                rows.push(...data.results); meta = data;
+            } catch (err) {
+                chunks[i].forEach((f) => rows.push({ filename: f.name, status: 'error', message: err.message }));
+            }
+        }
+        const summary = summarize(rows, truncated);
+        lastReport = {
+            results: rows, summary: summary,
+            threshold: meta ? meta.threshold : slider.value,
+            model_trained: meta ? meta.model_trained : undefined,
+            generated_at: meta ? meta.generated_at : new Date().toISOString()
+        };
+        render(lastReport);
+        $('runStatus').textContent = summary.skipped ? `⚠ ${summary.skipped} image(s) were skipped to stay within the server time limit — run them again.` : '';
+        runBtn.disabled = files.length === 0; $('runLabel').textContent = 'Inspect batch';
+    });
+
+    function pill(text, cls) { return `<span class="pill ${cls || ''}">${T.esc(text)}</span>`; }
+
+    function render(d) {
+        const s = d.summary;
+        $('emptyState').style.display = 'none'; $('report').style.display = 'block';
+        const archLabel = modelSelect.options[modelSelect.selectedIndex].text.split(' (')[0].split(' —')[0];
+        $('reportMeta').textContent = `Generated ${d.generated_at} · model ${archLabel} · threshold ${Number(d.threshold).toFixed(2)}` +
+            (s.truncated ? ` · only the first ${s.max_images} images were analysed` : '');
+        $('kpis').innerHTML = [
+            ['Inspected', s.analysed, ''],
+            ['Yield', s.yield_pct == null ? '—' : s.yield_pct + '%', 'good'],
+            ['Good', s.good, 'good'],
+            ['Defective', s.defective, 'bad'],
+            ['Low-margin', s.uncertain, ''],
+            ['Auto-rotated', s.rotated, ''],
+            ['Rejected / errors', s.rejected + s.errors + (s.skipped || 0), '']
+        ].map((k) => `<div class="kpi ${k[2]}"><b>${T.esc(k[1])}</b><span>${T.esc(k[0])}</span></div>`).join('');
+
+        const tw = $('trainedWarning');
+        if (d.model_trained === false) { tw.textContent = '⚠ This model has no trained checkpoint — these verdicts are not meaningful.'; tw.classList.add('show'); }
+        else tw.classList.remove('show');
+
+        const types = Object.entries(s.defect_types || {});
+        const max = Math.max(1, ...types.map((t) => t[1]));
+        $('pareto').innerHTML = types.length
+            ? types.map((t) => `<div class="pareto-row"><span>${T.esc(t[0])}</span><div class="pareto-bar"><span style="width:${(t[1] / max) * 100}%"></span></div><b>${t[1]}</b></div>`).join('')
+            : '<p class="tool-note">No defects flagged in this batch.</p>';
+
+        $('rows').innerHTML = d.results.map((r) => {
+            const thumb = r.thumb ? `<img alt="" src="data:image/jpeg;base64,${r.thumb}">` : '';
+            let verdict, p = '—', suspected = '—';
+            if (r.status === 'ok') {
+                verdict = r.prediction === 'Defective' ? pill('Defective', 'bad') : pill('Good', 'ok');
+                if (r.is_uncertain) verdict += ' ' + pill('low margin', 'warn');
+                if (r.ood_warning) verdict += ' ' + pill('unlike training photos', 'warn');
+                p = (r.p_defective * 100).toFixed(1) + '%';
+                suspected = r.suspected_label ? T.esc(r.suspected_label) : '—';
+            } else if (r.status === 'skipped') {
+                verdict = pill('Skipped', 'warn'); suspected = T.esc(r.message || '');
+            } else if (r.status === 'rejected') {
+                verdict = pill('Rejected', 'warn'); suspected = T.esc(r.message || '');
+            } else {
+                verdict = pill('Error', 'bad'); suspected = T.esc(r.message || '');
+            }
+            const orient = r.rotated ? `rotated ${Math.round(r.rotation_deg * 10) / 10}°` : 'as uploaded';
+            return `<tr><td>${thumb}</td><td>${T.esc(r.filename)}</td><td>${verdict}</td><td>${p}</td><td>${suspected}</td><td>${orient}</td></tr>`;
+        }).join('');
+    }
+
+    function csvCell(v) {
+        let s = v == null ? '' : String(v);
+        if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;          // neutralise spreadsheet formulas
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+    $('csvBtn').addEventListener('click', () => {
+        if (!lastReport) return;
+        const cols = ['filename', 'status', 'prediction', 'p_defective', 'confidence', 'is_uncertain', 'suspected_label', 'rotated', 'rotation_deg', 'message'];
+        const lines = [cols.join(',')].concat(lastReport.results.map((r) => cols.map((c) => csvCell(r[c])).join(',')));
+        const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'inspection_report.csv';
+        document.body.appendChild(a); a.click(); a.remove();
+    });
+    $('printBtn').addEventListener('click', () => window.print());
+})();
+</script>
+{% endblock %}

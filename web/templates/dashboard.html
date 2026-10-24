@@ -148,6 +148,7 @@
 
         <!-- Confidence Calibration -->
         {% if results.calibration %}
+        {% if results.calibration.version == 2 %}
         <div class="calibration-note animate-fade-up">
             <strong>Confidence calibration (ECE):</strong> {{ results.calibration.ece }}
             {% if results.calibration.ece > 0.1 %}
@@ -156,6 +157,12 @@
             — the displayed confidence percentages are reasonably well-calibrated.
             {% endif %}
         </div>
+        {% else %}
+        <div class="calibration-note animate-fade-up">
+            <strong>Confidence calibration (ECE):</strong> not shown — the saved figure was produced by an older,
+            incorrect formula. Re-run <code>python src/evaluate.py</code> to refresh it.
+        </div>
+        {% endif %}
         {% endif %}
 
         {% else %}
@@ -175,46 +182,41 @@
                 </div>
             </div>
         </div>
-        </div>
         {% endif %}
 
         <!-- Model Comparison Table -->
         <div class="threshold-section comparison-section glass-card animate-fade-up" style="margin-top: 30px;">
             <h3>Architecture Comparison</h3>
-            <p class="threshold-desc">Reference guide for the three supported model architectures.</p>
+            <p class="threshold-desc">
+                The three supported architectures and whether a trained checkpoint is actually available on this server.
+                {% if results and results.architecture %}The evaluation metrics above belong to <strong>{{ results.architecture }}</strong> only.{% endif %}
+            </p>
             <div class="table-wrapper">
                 <table class="data-table">
                     <thead>
                         <tr>
                             <th>Model</th>
-                            <th>Profile</th>
+                            <th>Checkpoint</th>
                             <th>Parameters</th>
-                            <th>Speed</th>
-                            <th>Recommended Use Case</th>
+                            <th>Relative speed</th>
+                            <th>Notes</th>
                         </tr>
                     </thead>
                     <tbody>
+                        {% set arch_info = {
+                            'convnext_tiny': ['28.0M', 'Fast', 'Default model on this site.'],
+                            'efficientnet_b0': ['5.3M', 'Very fast', 'Smallest of the three; suited to edge devices.'],
+                            'resnet50': ['25.6M', 'Moderate', 'Classic convolutional baseline.']
+                        } %}
+                        {% for a in architectures %}
                         <tr>
-                            <td><strong>ConvNeXt-Tiny</strong></td>
-                            <td><span class="threshold-badge" style="background: rgba(16, 185, 129, 0.2); color: var(--color-success); white-space: nowrap;">Balanced (Default)</span></td>
-                            <td>28.0M</td>
-                            <td>Fast</td>
-                            <td>Default choice. Best balance of speed, accuracy, and robust OOD detection.</td>
+                            <td><strong>{{ a.label }}</strong>{% if a.default %} <span class="pill">default</span>{% endif %}</td>
+                            <td>{% if a.available %}<span class="pill ok">trained checkpoint</span>{% else %}<span class="pill warn">not available</span>{% endif %}</td>
+                            <td>{{ arch_info[a.id][0] }}</td>
+                            <td>{{ arch_info[a.id][1] }}</td>
+                            <td>{{ arch_info[a.id][2] }}</td>
                         </tr>
-                        <tr>
-                            <td><strong>EfficientNet-B0</strong></td>
-                            <td><span class="threshold-badge">100% Recall</span></td>
-                            <td>5.3M</td>
-                            <td>Very Fast</td>
-                            <td>Edge devices and strict zero-defect policies (captures all anomalies, higher false positive rate).</td>
-                        </tr>
-                        <tr>
-                            <td><strong>ResNet-50</strong></td>
-                            <td><span class="threshold-badge" style="background: rgba(239, 68, 68, 0.2); color: var(--color-danger);">Aggressive</span></td>
-                            <td>25.6M</td>
-                            <td>Moderate</td>
-                            <td>High-confidence defect localization; fewer false positives but requires more compute.</td>
-                        </tr>
+                        {% endfor %}
                     </tbody>
                 </table>
             </div>

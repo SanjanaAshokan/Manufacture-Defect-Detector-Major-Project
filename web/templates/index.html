@@ -21,8 +21,8 @@
                 <span class="gradient-text">Defects Instantly</span>
             </h1>
             <p class="hero-subtitle">
-                AI-powered transistor quality inspection using fine-tuned EfficientNet-B0 &amp; ResNet-50. 
-                Upload an image and receive instant defect classification with visual heatmap explanations.
+                AI-powered transistor quality inspection with fine-tuned ConvNeXt, EfficientNet &amp; ResNet models.
+                Upload an image — even a sideways one — and receive instant defect classification with visual heatmap explanations.
             </p>
             <div class="hero-actions">
                 <a href="/detect" class="btn btn-primary btn-lg" id="heroDetectBtn">
@@ -49,16 +49,35 @@
                     <div class="code-line"><span class="code-keyword">from</span> <span class="code-module">gradcam</span> <span class="code-keyword">import</span> <span class="code-func">GradCAM</span></div>
                     <div class="code-line">&nbsp;</div>
                     <div class="code-line"><span class="code-comment"># Load fine-tuned model</span></div>
-                    <div class="code-line">model = <span class="code-func">load_model</span>(<span class="code-string">"efficientnet_b0"</span>)</div>
+                    <div class="code-line">model = <span class="code-func">load_model</span>(<span class="code-string">"convnext_tiny"</span>)</div>
                     <div class="code-line">result = <span class="code-func">predict</span>(image)</div>
                     <div class="code-line">&nbsp;</div>
-                    <div class="code-line"><span class="code-comment"># → Defective (96.4% confidence)</span></div>
-                    <div class="code-line"><span class="code-comment"># → Grad-CAM: bent_lead region</span></div>
+                    <div class="code-line"><span class="code-comment"># → Defective, with a confidence score</span></div>
+                    <div class="code-line"><span class="code-comment"># → Grad-CAM: suspected lead region</span></div>
                 </div>
             </div>
         </div>
     </div>
 </section>
+
+<!-- Toolkit -->
+<section class="tools-section" style="padding: 60px 0 20px;">
+    <div class="container">
+        <div class="section-header">
+            <span class="section-tag">Toolkit</span>
+            <h2 class="section-title">More than a single-image classifier</h2>
+        </div>
+        <div class="tools-grid">
+            <a class="tool-tile" href="/detect"><span class="tile-icon">🧭</span><h3>Orientation Doctor</h3><p>Sideways or upside-down transistors are detected and rotated upright automatically — watch it happen on the Detect page.</p></a>
+            <a class="tool-tile" href="/detect"><span class="tile-icon">🔎</span><h3>Defect Diagnosis</h3><p>A box and a suspected category (lead, case, placement) drawn from where the model is looking.</p></a>
+            <a class="tool-tile" href="/batch"><span class="tile-icon">📦</span><h3>Batch Inspection</h3><p>Drop a folder-zip of images; get yield %, a defect Pareto, a CSV and a printable report.</p></a>
+            <a class="tool-tile" href="/compare"><span class="tile-icon">🗳️</span><h3>Model Consensus</h3><p>Every trained model votes on the same part; disagreements are flagged for human review.</p></a>
+            <a class="tool-tile" href="/lab"><span class="tile-icon">🧪</span><h3>Robustness Lab</h3><p>Rotate, dim, blur and add noise — then sweep all angles to see how stable the verdict is.</p></a>
+            <a class="tool-tile" href="/line"><span class="tile-icon">🏭</span><h3>Line Simulator</h3><p>A simulated production line with live yield and a control chart that alerts on defect spikes.</p></a>
+        </div>
+    </div>
+</section>
+
 
 <!-- Features Section -->
 <section class="features" id="features">
@@ -74,7 +93,7 @@
                     <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/><path d="m11 8v6M8 11h6"/></svg>
                 </div>
                 <h3>AI-Powered Detection</h3>
-                <p>Fine-tuned EfficientNet-B0 and ResNet-50 models classify transistor images across 4 defect categories{% if results %}, currently measuring {{ (results.metrics.accuracy * 100)|round(1) }}% accuracy on the held-out test set{% endif %}.</p>
+                <p>Fine-tuned ConvNeXt, EfficientNet and ResNet models classify transistor images as good or defective{% if results %}, currently measuring {{ (results.metrics.accuracy * 100)|round(1) }}% accuracy on the held-out test set{% endif %}.</p>
             </div>
             <div class="feature-card glass-card animate-fade-up delay-100">
                 <div class="feature-icon feature-icon-purple">

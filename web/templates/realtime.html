@@ -20,9 +20,7 @@
                     <div class="control-group">
                         <label for="modelSelect">Model</label>
                         <select id="modelSelect" class="form-select">
-                            <option value="efficientnet_b0">EfficientNet-B0 (100% Recall)</option>
-                            <option value="convnext_tiny" selected>ConvNeXt-Tiny (Balanced - Default)</option>
-                            <option value="resnet50">ResNet-50 (Aggressive)</option>
+                            {% include "_model_options.html" %}
                         </select>
                     </div>
                     <div class="control-group">
@@ -201,8 +199,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // Motion tracking variables
     let prevImageData = null;
     let stillFrames = 0;
-    const TARGET_STILL_FRAMES = 3; // ~0.5 seconds at 6-7 fps
-    const MOTION_THRESHOLD = 30; // Average pixel difference
+    const TARGET_STILL_FRAMES = 3; // ~1.5 seconds of stillness at ~2 scans/second
+    const MOTION_THRESHOLD = 8; // Average per-channel pixel difference (0-255 scale); camera noise is ~2-4
 
     // Hidden motion canvas
     const motionCanvas = document.createElement('canvas');
@@ -334,9 +332,11 @@ document.addEventListener("DOMContentLoaded", () => {
             // Store current frame for next time
             prevImageData = new Uint8ClampedArray(currentImageData);
 
-            // Draw full res video frame to canvas for API inference
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+            // Downscale the frame before upload (the model works at 224px anyway) so
+            // each request is a few tens of KB instead of a full-resolution frame.
+            const frameScale = Math.min(1, 640 / video.videoWidth);
+            canvas.width = Math.round(video.videoWidth * frameScale);
+            canvas.height = Math.round(video.videoHeight * frameScale);
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
@@ -355,6 +355,9 @@ document.addEventListener("DOMContentLoaded", () => {
             formData.append('architecture', modelSelect.value);
             formData.append('threshold', thresholdSlider.value);
             formData.append('bypass_ood', 'false');
+            // Only build the Grad-CAM heat-map for the final, held-still frame;
+            // scanning frames just need a quick verdict.
+            formData.append('gradcam', isStill ? 'true' : 'false');
 
             // Send to API
             const response = await fetch('/api/predict', {
@@ -409,7 +412,7 @@ document.addEventListener("DOMContentLoaded", () => {
             // Short delay to avoid hammering the server too hard
             setTimeout(() => {
                 requestAnimationFrame(processLoop);
-            }, 150); // ~6-7 FPS cap
+            }, 400); // ~2 scans per second keeps the server responsive
         }
     }
 
