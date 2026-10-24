@@ -134,14 +134,17 @@ def compute_defect_type_breakdown(labels: np.ndarray, preds: np.ndarray, sample_
 
 def compute_calibration_error(labels: np.ndarray, probs: np.ndarray, n_bins: int = 10) -> dict:
     """
-    Expected Calibration Error (ECE) for the "defective" probability.
+    Expected Calibration Error (ECE) of the predicted-class confidence.
     A model can have high accuracy but still be badly overconfident (e.g.
     saying 99% when it's right 70% of the time) — ECE is what actually
     tells you whether the displayed confidence numbers can be trusted,
     which plain accuracy/precision cannot.
     """
-    confidences = probs[:, 1]
-    predictions = (confidences >= 0.5).astype(int)
+    # Confidence = probability of the class the model actually predicted (>= 0.5 for
+    # two classes). Using P(defective) here would compare a "how defective" score with
+    # accuracy and report a huge, meaningless ECE for every model.
+    predictions = (probs[:, 1] >= 0.5).astype(int)
+    confidences = probs.max(axis=1)
     correct = (predictions == labels).astype(int)
 
     bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
@@ -165,7 +168,8 @@ def compute_calibration_error(labels: np.ndarray, probs: np.ndarray, n_bins: int
             "avg_accuracy": round(float(bin_acc), 4),
         })
 
-    return {"ece": round(float(ece), 4), "bins": bins_report}
+    # version 2 = fixed metric (predicted-class confidence). Older saved results lack it.
+    return {"ece": round(float(ece), 4), "bins": bins_report, "version": 2}
 
 
 def plot_confusion_matrix(labels, preds, save_path: str):

@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}Robustness Lab — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="tool-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Lab</span>
+            <h1 class="section-title">Robustness Lab</h1>
+            <p class="section-subtitle">Stress-test the model: rotate, dim, blur and add noise to a part, then sweep every angle to see whether the verdict stays stable — with and without the orientation fix.</p>
+        </div>
+
+        <div class="tool-grid">
+            <div class="glass-card detect-panel">
+                <h3 class="panel-title">Controls</h3>
+                <div class="tool-stack">
+                    {% if examples %}
+                    <div class="examples-section" style="margin-top:0;">
+                        <p class="examples-label">Pick a part:</p>
+                        <div class="examples-grid">
+                            {% for example in examples %}
+                            <button class="example-thumb" type="button" data-src="/examples/{{ example }}" title="{{ example }}"><img src="/examples/{{ example }}" alt="{{ example }}" loading="lazy"></button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    <button class="btn btn-ghost btn-sm" id="uploadBtn" type="button">…or use your own image</button>
+                    <input type="file" id="fileInput" accept="image/png,image/jpeg,image/bmp,image/tiff" style="display:none;">
+
+                    <div class="slider-row"><label for="rotate">Rotation</label><input type="range" id="rotate" min="0" max="359" step="1" value="0" class="form-range"><span id="rotateV">0°</span></div>
+                    <div class="slider-row"><label for="bright">Brightness</label><input type="range" id="bright" min="40" max="160" step="1" value="100" class="form-range"><span id="brightV">100%</span></div>
+                    <div class="slider-row"><label for="blur">Blur</label><input type="range" id="blur" min="0" max="4" step="1" value="0" class="form-range"><span id="blurV">0</span></div>
+                    <div class="slider-row"><label for="noise">Noise</label><input type="range" id="noise" min="0" max="60" step="1" value="0" class="form-range"><span id="noiseV">0</span></div>
+
+                    <div class="control-group">
+                        <label for="modelSelect">Model</label>
+                        <select id="modelSelect" class="form-select">{% include "_model_options.html" %}</select>
+                        <div class="model-warning" id="modelWarning">⚠ This architecture has no trained checkpoint on this server — results would be meaningless.</div>
+                    </div>
+                    <label class="checkbox-row" for="autoOrientToggle">
+                        <input type="checkbox" id="autoOrientToggle" checked>
+                        <span>Auto-orient sideways transistors</span>
+                    </label>
+                    <button class="btn btn-primary btn-block" id="sweepBtn">Sweep rotation 0°–330°</button>
+                    <p class="tool-note" id="status"></p>
+                    <p class="tool-note">Lab runs skip the "is this a transistor?" gate so only the classifier is being tested. Threshold is fixed at 0.65.</p>
+                </div>
+            </div>
+
+            <div class="tool-stack">
+                <div class="glass-card detect-panel">
+                    <h3 class="panel-title">Live test</h3>
+                    <canvas id="preview" class="lab-preview" width="384" height="384"></canvas>
+                    <div class="tool-row" style="margin-top:12px; justify-content:center;" id="verdictRow"><span class="pill">Choose a part to begin</span></div>
+                    <p class="tool-note" id="orientNote" style="text-align:center;"></p>
+                </div>
+                <div class="glass-card detect-panel">
+                    <h3 class="panel-title">Rotation sweep</h3>
+                    <div class="chart-box"><canvas id="chart"></canvas></div>
+                    <p class="tool-note" id="sweepSummary" style="margin-top:8px;">Run a sweep to compare the model with and without auto-orient. Points are red when the verdict is “defective”.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/tools.js') }}"></script>
+<script>
+(function () {
+    const T = window.DefectTools;
+    const $ = (id) => document.getElementById(id);
+    const SIZE = 384, THRESHOLD = 0.65;
+    const canvas = $('preview'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const modelSelect = $('modelSelect');
+    let srcImg = null, srcName = '', reqId = 0, sweeping = false;
+
+    function syncModelWarning() {
+        const opt = modelSelect.options[modelSelect.selectedIndex];
+        $('modelWarning').classList.toggle('show', !!opt && opt.dataset.trained === 'false');
+    }
+    modelSelect.addEventListener('change', () => { syncModelWarning(); schedule(); });
+    syncModelWarning();
+
+    function params() {
+        return {
+            angle: +$('rotate').value, bright: +$('bright').value / 100,
+            blur: +$('blur').value, noise: +$('noise').value
+        };
+    }
+
+    /** Draw the stressed variant of the source image onto the preview canvas. */
+    function renderVariant(angle, bright, blur, noise) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.fillStyle = '#946454';
+        ctx.fillRect(0, 0, SIZE, SIZE);
+        if (!srcImg) return;
+        const s = SIZE / Math.max(srcImg.width, srcImg.height);
+        ctx.save();
+        ctx.translate(SIZE / 2, SIZE / 2);
+        ctx.rotate((angle * Math.PI) / 180);
+        ctx.drawImage(srcImg, (-srcImg.width * s) / 2, (-srcImg.height * s) / 2, srcImg.width * s, srcImg.height * s);
+        ctx.restore();
+        if (blur > 0) {
+            const small = Math.max(8, Math.round(SIZE / (1 + blur * 2)));
+            const tmp = document.createElement('canvas'); tmp.width = tmp.height = small;
+            const tctx = tmp.getContext('2d');
+            tctx.imageSmoothingEnabled = true; tctx.drawImage(canvas, 0, 0, small, small);
+            ctx.imageSmoothingEnabled = true; ctx.drawImage(tmp, 0, 0, SIZE, SIZE);
+        }
+        if (bright !== 1 || noise > 0) {
+            const img = ctx.getImageData(0, 0, SIZE, SIZE), d = img.data;
+            for (let i = 0; i < d.length; i += 4) {
+                const n = noise ? (Math.random() + Math.random() + Math.random() - 1.5) * noise * 1.15 : 0;
+                d[i] = Math.max(0, Math.min(255, d[i] * bright + n));
+                d[i + 1] = Math.max(0, Math.min(255, d[i + 1] * bright + n));
+                d[i + 2] = Math.max(0, Math.min(255, d[i + 2] * bright + n));
+            }
+            ctx.putImageData(img, 0, 0);
+        }
+    }
+
+    function toBlob() { return new Promise((res) => canvas.toBlob(res, 'image/png')); }
+
+    function verdictPill(p) {
+        return p >= THRESHOLD ? '<span class="pill bad">Defective</span>' : '<span class="pill ok">Good</span>';
+    }
+
+    async function predictNow() {
+        if (!srcImg || sweeping) return;
+        const id = ++reqId, p = params();
+        renderVariant(p.angle, p.bright, p.blur, p.noise);
+        const blob = await toBlob();
+        const r = await T.postImage('/api/predict', blob, 'lab.png', {
+            architecture: modelSelect.value, threshold: THRESHOLD, gradcam: 'false', bypass_ood: 'true',
+            auto_orient: $('autoOrientToggle').checked ? 'true' : 'false'
+        });
+        if (id !== reqId) return;   // a newer request superseded this one
+        if (!r.ok) { $('verdictRow').innerHTML = `<span class="pill bad">${T.esc(r.data.error || 'Error')}</span>`; return; }
+        const pd = r.data.probabilities.defective;
+        $('verdictRow').innerHTML = `${verdictPill(pd)} <span class="pill">P(defective) ${(pd * 100).toFixed(1)}%</span>`;
+        const o = r.data.orientation || {};
+        $('orientNote').textContent = o.applied
+            ? `Auto-orient turned the part ${o.rotation_deg}° (leads pointed ${o.leads_pointing}).`
+            : (o.leads_pointing === 'down' ? 'Leads point down — no rotation applied.' : 'No rotation applied.');
+    }
+    const schedule = T.debounce(predictNow, 350);
+
+    [['rotate', '°'], ['bright', '%'], ['blur', ''], ['noise', '']].forEach(([id, unit]) => {
+        $(id).addEventListener('input', () => { $(id + 'V').textContent = $(id).value + unit; schedule(); });
+    });
+    $('autoOrientToggle').addEventListener('change', schedule);
+
+    async function selectSource(url, name) {
+        srcImg = await T.loadImage(url); srcName = name || url;
+        document.querySelectorAll('.example-thumb').forEach((b) => b.style.outline = b.dataset.src === url ? '2px solid var(--color-secondary)' : '');
+        predictNow();
+    }
+    document.querySelectorAll('.example-thumb').forEach((b) => b.addEventListener('click', () => selectSource(b.dataset.src, b.title)));
+    $('uploadBtn').addEventListener('click', () => $('fileInput').click());
+    $('fileInput').addEventListener('change', () => {
+        const f = $('fileInput').files[0];
+        if (f) selectSource(URL.createObjectURL(f), f.name);
+    });
+
+    // ---- rotation sweep: model with vs without auto-orient ----
+    $('sweepBtn').addEventListener('click', async () => {
+        if (!srcImg || sweeping) { if (!srcImg) $('status').textContent = 'Pick a part first.'; return; }
+        sweeping = true; reqId++;
+        const btn = $('sweepBtn'); btn.disabled = true;
+        const angles = []; for (let a = 0; a < 360; a += 30) angles.push(a);
+        const on = new Array(angles.length).fill(null), off = new Array(angles.length).fill(null);
+        const base = params();
+        const draw = () => {
+            const col = (arr) => arr.map((v) => (v == null ? null : v >= THRESHOLD ? '#ef4444' : '#10b981'));
+            T.lineChart($('chart'), [
+                { label: 'Auto-orient ON', color: '#00d4ff', values: on },
+                { label: 'Auto-orient OFF (raw model)', color: '#a78bfa', values: off, dashed: true }
+            ], { xLabels: angles.map((a) => a + '°'), yMin: 0, yMax: 1, yFormat: (v) => Math.round(v * 100) + '%',
+                 hLines: [{ y: THRESHOLD, label: 'threshold', color: '#f59e0b' }], pointColors: [col(on), col(off)] });
+        };
+        draw();
+        for (let i = 0; i < angles.length; i++) {
+            $('status').textContent = `Sweeping… ${i + 1}/${angles.length}`;
+            renderVariant(angles[i], base.bright, base.blur, base.noise);
+            const blob = await toBlob();
+            for (const [arr, flag] of [[on, 'true'], [off, 'false']]) {
+                const r = await T.postImage('/api/predict', blob, 'sweep.png', {
+                    architecture: modelSelect.value, threshold: THRESHOLD, gradcam: 'false', bypass_ood: 'true', auto_orient: flag
+                });
+                arr[i] = r.ok ? r.data.probabilities.defective : null;
+            }
+            draw();
+        }
+        const pct = (v) => (v * 100).toFixed(0) + '%';
+        const swing = (arr, idxs) => {
+            if (arr[0] == null) return 0;
+            return Math.max(0, ...idxs.map((i) => (arr[i] == null ? 0 : Math.abs(arr[i] - arr[0])))) * 100;
+        };
+        const flips = (arr) => (arr[0] == null ? 0 : arr.filter((v) => v != null && (v >= THRESHOLD) !== (arr[0] >= THRESHOLD)).length);
+        const quarter = angles.map((a, i) => i).filter((i) => angles[i] % 90 === 0 && i !== 0);
+        const all = angles.map((a, i) => i).filter((i) => i !== 0);
+        const upright = on[0] == null ? null : on[0];
+        let msg;
+        if (upright == null) {
+            msg = 'The upright (0°) image could not be analysed, so there is nothing to compare against.';
+        } else {
+            msg = `Upright (0°): ${pct(upright)} defective → ${upright >= THRESHOLD ? 'Defective' : 'Good'}. ` +
+                  `At the quarter turns (90°, 180°, 270°) the probability moves by at most ${swing(on, quarter).toFixed(1)} points with auto-orient ON ` +
+                  `versus ${swing(off, quarter).toFixed(1)} points OFF. Across all 11 other angles: ${swing(on, all).toFixed(1)} (ON) versus ${swing(off, all).toFixed(1)} (OFF) points; ` +
+                  `the verdict flips at ${flips(on)} angles with ON and ${flips(off)} with OFF.`;
+            if (on.every((v) => v == null || v >= THRESHOLD)) {
+                msg += ' Every angle reads “defective” because even the upright part is above the threshold — pick a part marked good to see verdicts flip.';
+            }
+            msg += ' Angles between the quarter turns are only corrected when the lead direction is clear.';
+        }
+        $('sweepSummary').textContent = msg;
+        $('status').textContent = '';
+        sweeping = false; btn.disabled = false;
+        predictNow();
+    });
+
+    window.addEventListener('resize', () => { /* chart redraws on next sweep step */ });
+
+    // start with a good example so the page is alive immediately
+    const first = Array.from(document.querySelectorAll('.example-thumb')).find((b) => /good/i.test(b.title)) || document.querySelector('.example-thumb');
+    if (first) selectSource(first.dataset.src, first.title); else renderVariant(0, 1, 0, 0);
+})();
+</script>
+{% endblock %}

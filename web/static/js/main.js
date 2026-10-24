@@ -77,6 +77,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const thresholdSlider = document.getElementById('thresholdSlider');
     const thresholdValue = document.getElementById('thresholdValue');
     const modelSelect = document.getElementById('modelSelect');
+    const autoOrientToggle = document.getElementById('autoOrientToggle');
+    const modelWarning = document.getElementById('modelWarning');
+
+    // Orientation view + diagnosis elements (Detect page)
+    const orientCard = document.getElementById('orientationCard');
+    const orientWrap = document.getElementById('orientWrap');
+    const orientImg = document.getElementById('orientImg');
+    const orientBodyBox = document.getElementById('orientBodyBox');
+    const orientLeadBox = document.getElementById('orientLeadBox');
+    const orientText = document.getElementById('orientText');
+    const orientReplay = document.getElementById('orientReplay');
+    const diagnosisCard = document.getElementById('diagnosisCard');
+    const diagTitle = document.getElementById('diagTitle');
+    const diagNote = document.getElementById('diagNote');
+    const diagBox = document.getElementById('diagBox');
+    let lastOrientation = null;
+    let lastDiagnosis = null;
 
     const resultsPanel = document.getElementById('resultsPanel');
     const resultsEmpty = document.getElementById('resultsEmpty');
@@ -85,6 +102,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsError = document.getElementById('resultsError');
     const errorMessage = document.getElementById('errorMessage');
     const retryBtn = document.getElementById('retryBtn');
+    const analyzeAnywayBtn = document.getElementById('analyzeAnywayBtn');
+    const oodWarning = document.getElementById('oodWarning');
+    let lastBypass = false;
     
     const analyzeAnotherBtn = document.getElementById('analyzeAnotherBtn');
     
@@ -171,6 +191,24 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
+        // Warn when the selected model has no trained checkpoint on this server
+        if (modelSelect && modelWarning) {
+            const syncModelWarning = () => {
+                const opt = modelSelect.options[modelSelect.selectedIndex];
+                modelWarning.classList.toggle('show', !!opt && opt.dataset.trained === 'false');
+            };
+            modelSelect.addEventListener('change', syncModelWarning);
+            syncModelWarning();
+        }
+
+        if (orientReplay) {
+            orientReplay.addEventListener('click', () => playOrientation(lastOrientation));
+        }
+        if (gradcamImage) {
+            gradcamImage.addEventListener('load', positionDiagBox);
+        }
+        window.addEventListener('resize', positionDiagBox);
+
         // Live threshold slider value update
         thresholdSlider.addEventListener('input', () => {
             thresholdValue.textContent = parseFloat(thresholdSlider.value).toFixed(2);
@@ -204,6 +242,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Error retry button
+        if (analyzeAnywayBtn) {
+            analyzeAnywayBtn.addEventListener('click', () => runInference(true));
+        }
         retryBtn.addEventListener('click', () => {
             if (selectedFile) {
                 runInference();
@@ -279,14 +320,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Helper: Display validation/runtime error inside panel
-    function showError(msg) {
+    function showError(msg, offerAnyway) {
         errorMessage.textContent = msg;
+        if (analyzeAnywayBtn) analyzeAnywayBtn.style.display = offerAnyway ? 'inline-flex' : 'none';
         showResultState('error');
     }
 
     // Main API caller
-    function runInference() {
+    function runInference(bypassOod) {
         if (!selectedFile) return;
+        lastBypass = bypassOod === true;
 
         showResultState('loading');
         
@@ -302,6 +345,8 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('image', selectedFile);
         formData.append('architecture', modelSelect.value);
         formData.append('threshold', thresholdSlider.value);
+        formData.append('auto_orient', (!autoOrientToggle || autoOrientToggle.checked) ? 'true' : 'false');
+        if (lastBypass) formData.append('bypass_ood', 'true');
 
         fetch('/api/predict', {
             method: 'POST',
@@ -310,7 +355,9 @@ document.addEventListener('DOMContentLoaded', () => {
         .then(res => {
             if (!res.ok) {
                 return res.json().then(data => {
-                    throw new Error(data.error || 'Server error occurred during prediction.');
+                    const err = new Error(data.error || 'Server error occurred during prediction.');
+                    err.oodRejected = !!data.ood_rejected;
+                    throw err;
                 });
             }
             return res.json();
@@ -325,7 +372,7 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         .catch(err => {
             console.error(err);
-            showError(err.message || 'Network connection error. Server might be offline.');
+            showError(err.message || 'Network connection error. Server might be offline.', !!err.oodRejected);
         })
         .finally(() => {
             // Restore button states
@@ -390,15 +437,101 @@ document.addEventListener('DOMContentLoaded', () => {
             metaCalibrated.style.display = data.calibrated ? 'inline' : 'none';
         }
 
+        if (oodWarning) {
+            const msgs = [];
+            if (lastBypass) msgs.push('You chose to analyse this image even though it did not look like a training-style transistor photo.');
+            if (data.ood && data.ood.warning) msgs.push(data.ood.warning);
+            oodWarning.textContent = msgs.join(' ');
+            oodWarning.style.display = msgs.length ? 'block' : 'none';
+        }
+        renderOrientation(data.orientation);
+        renderDiagnosis(data.diagnosis, data.is_defective);
+
         // Switch to content layout
         showResultState('content');
+        requestAnimationFrame(positionDiagBox);   // image sizes are only known once the panel is visible
         resultsPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    // ---- Orientation view: animate the upload turning upright ----
+    function setBox(el, box) {
+        if (!el) return;
+        if (!box) { el.style.display = 'none'; return; }
+        el.style.display = 'block';
+        el.style.left = (box[0] * 100) + '%';
+        el.style.top = (box[1] * 100) + '%';
+        el.style.width = ((box[2] - box[0]) * 100) + '%';
+        el.style.height = ((box[3] - box[1]) * 100) + '%';
+    }
+
+    function playOrientation(o) {
+        if (!orientWrap || !o) return;
+        orientWrap.style.transition = 'none';
+        orientWrap.style.transform = 'rotate(0deg)';
+        void orientWrap.offsetWidth;   // restart the transition
+        if (o.applied) {
+            setTimeout(() => {
+                orientWrap.style.transition = '';
+                // server reports the counter-clockwise turn; CSS rotates clockwise
+                orientWrap.style.transform = `rotate(${-o.rotation_deg}deg)`;
+            }, 700);
+        }
+    }
+
+    function renderOrientation(o) {
+        lastOrientation = o || null;
+        if (!orientCard) return;
+        if (!o) { orientCard.style.display = 'none'; return; }
+        orientCard.style.display = 'block';
+        orientImg.src = previewImage.src;
+        setBox(orientBodyBox, o.body_box);
+        setBox(orientLeadBox, o.lead_box);
+
+        let text;
+        if (o.applied) {
+            const deg = Math.round(o.rotation_deg * 10) / 10;
+            const quarter = Math.abs(deg % 90) < 0.01;
+            text = (quarter ? 'Sideways transistor detected' : 'Tilted transistor detected') +
+                   `: the leads pointed ${o.leads_pointing}. ` +
+                   `The image was turned ${deg}° counter-clockwise so the model sees it upright.`;
+        } else if (o.leads_pointing === 'down') {
+            text = 'Upright already (leads point down) — no rotation needed.';
+        } else if (autoOrientToggle && !autoOrientToggle.checked) {
+            text = 'Auto-orient is off — the image was analysed exactly as uploaded.';
+        } else {
+            text = 'Orientation could not be determined confidently — the image was analysed as uploaded.';
+        }
+        orientText.textContent = text;
+        if (orientImg.complete) playOrientation(o); else orientImg.onload = () => playOrientation(o);
+    }
+
+    // ---- Suspected-defect box drawn over the Grad-CAM image ----
+    function positionDiagBox() {
+        if (!diagBox || !gradcamImage) return;
+        const d = lastDiagnosis;
+        if (!d || !d.box || !gradcamImage.clientWidth) { diagBox.style.display = 'none'; return; }
+        diagBox.style.display = 'block';
+        diagBox.style.left = (gradcamImage.offsetLeft + d.box[0] * gradcamImage.clientWidth) + 'px';
+        diagBox.style.top = (gradcamImage.offsetTop + d.box[1] * gradcamImage.clientHeight) + 'px';
+        diagBox.style.width = ((d.box[2] - d.box[0]) * gradcamImage.clientWidth) + 'px';
+        diagBox.style.height = ((d.box[3] - d.box[1]) * gradcamImage.clientHeight) + 'px';
+    }
+
+    function renderDiagnosis(d, isDefective) {
+        lastDiagnosis = (isDefective && d) ? d : null;
+        if (!diagnosisCard) return;
+        if (!lastDiagnosis) { diagnosisCard.style.display = 'none'; positionDiagBox(); return; }
+        diagnosisCard.style.display = 'block';
+        diagTitle.textContent = d.label;
+        diagNote.textContent = d.note;
+        positionDiagBox();
     }
 });
 
     // ---- Recent Detections Logic ----
     function updateRecentDetections(resultData) {
-        let recent = JSON.parse(localStorage.getItem('recentDetections') || '[]');
+        let recent = [];
+        try { recent = JSON.parse(localStorage.getItem('recentDetections') || '[]'); } catch (e) { recent = []; }
         recent.unshift({
             image: resultData.original_image.startsWith('data:image') ? resultData.original_image : 'data:image/png;base64,' + resultData.original_image,
             prediction: resultData.prediction,
@@ -407,7 +540,7 @@ document.addEventListener('DOMContentLoaded', () => {
             time: new Date().toLocaleTimeString()
         });
         if (recent.length > 5) recent.pop();
-        localStorage.setItem('recentDetections', JSON.stringify(recent));
+        try { localStorage.setItem('recentDetections', JSON.stringify(recent)); } catch (e) { /* storage full or blocked */ }
         renderRecentDetections();
     }
     
@@ -415,7 +548,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const recentList = document.getElementById('recentList');
         if (!recentList) return;
         
-        const recent = JSON.parse(localStorage.getItem('recentDetections') || '[]');
+        let recent = [];
+        try { recent = JSON.parse(localStorage.getItem('recentDetections') || '[]'); } catch (e) { recent = []; }
         if (recent.length === 0) {
             recentList.innerHTML = '<p class="text-muted">No recent detections.</p>';
             return;

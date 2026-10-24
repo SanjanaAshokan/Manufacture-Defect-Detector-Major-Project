@@ -6,7 +6,9 @@ Custom website with:
   - Detection page with drag-and-drop upload and AJAX inference
   - Dashboard page with model metrics and threshold analysis
   - About page with architecture explanation
-  - REST API endpoint for inference
+  - Batch inspection, three-model consensus, robustness lab and production-line
+    simulator pages
+  - REST API endpoints for inference
 
 Deployed on Hugging Face Spaces via Docker SDK (port 7860).
 """
@@ -14,15 +16,21 @@ Deployed on Hugging Face Spaces via Docker SDK (port 7860).
 import os
 import sys
 import json
+import base64
+import threading
+import time
 import traceback
+import zipfile
 from pathlib import Path
 from io import BytesIO
 from datetime import datetime, timezone
 
+import cv2
+import numpy as np
 import torch
 import yaml
 from flask import Flask, render_template, request, jsonify, send_from_directory
-from PIL import Image
+from PIL import Image, ImageOps
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +39,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.models import get_model
 from src.gradcam import predict_with_gradcam, image_to_base64
 from src.utils import load_checkpoint, get_device
+from src.orientation import auto_orient
+from src.diagnosis import diagnose
 
 # ============================================================
 # Flask App Initialization
@@ -52,6 +62,34 @@ model_status_cache = {}
 CONFIG = None
 DEVICE = None
 
+# Flask's server is multi-threaded but the models (and their Grad-CAM hooks) are shared
+# objects, so every model load / forward / Grad-CAM pass is serialised through this lock.
+inference_lock = threading.RLock()
+init_lock = threading.Lock()
+
+# Architectures offered in the UI (id, display name). Availability is decided at runtime
+# from the checkpoints that really exist — nothing here claims a model is trained.
+ARCHITECTURES = [
+    ("convnext_tiny", "ConvNeXt-Tiny"),
+    ("efficientnet_b0", "EfficientNet-B0"),
+    ("resnet50", "ResNet-50"),
+]
+ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
+BATCH_MAX_IMAGES = 30
+# Firebase Hosting rewrites to Cloud Run end a request after 60 s, so a batch call stops
+# starting new images after this many seconds and reports the rest as "skipped".
+BATCH_TIME_BUDGET_S = float(os.environ.get("BATCH_TIME_BUDGET", 40))
+hf_download_failed = set()
+
+
+class ApiError(Exception):
+    """Raised for client mistakes so they come back as clean JSON 4xx, not a 500."""
+
+    def __init__(self, message, status=400):
+        super().__init__(message)
+        self.message = message
+        self.status = status
+
 
 def load_config():
     """Load project configuration."""
@@ -60,84 +98,129 @@ def load_config():
         return yaml.safe_load(f)
 
 
+def checkpoint_path_for(architecture: str) -> Path:
+    return PROJECT_ROOT / CONFIG["training"]["checkpoint_dir"] / f"best_{architecture}.pth"
+
+
+def arch_available(architecture: str) -> bool:
+    """
+    Cheap check (no model load): is there a trained checkpoint for this architecture,
+    or a model repo configured that may provide one?
+    """
+    if checkpoint_path_for(architecture).exists():
+        return True
+    remote = os.environ.get("HF_MODEL_REPO") or os.environ.get("MODEL_WEIGHTS_BASE_URL")
+    return bool(remote) and architecture not in hf_download_failed
+
+
+def download_weights(url: str, destination: Path) -> bool:
+    """Fetch one checkpoint over HTTPS (e.g. a Google Cloud Storage object) into `destination`."""
+    import urllib.request
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(".part")
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp, open(tmp, "wb") as out:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+        tmp.replace(destination)
+        print(f"[Web] Downloaded weights from {url}")
+        return True
+    except Exception as e:
+        print(f"[Web] Could not download weights from {url}: {e}")
+        if tmp.exists():
+            tmp.unlink()
+        return False
+
+
 def get_or_load_model(architecture: str):
     """
     Load a model into cache (or return cached version).
-    Falls back to pretrained ImageNet model if no checkpoint exists.
+    Falls back to an ImageNet-only backbone if no checkpoint exists.
     """
-    if architecture in model_cache:
-        return model_cache[architecture]
+    with inference_lock:
+        if architecture in model_cache:
+            return model_cache[architecture]
 
-    model, target_layer = get_model(
-        architecture=architecture,
-        num_classes=CONFIG["model"]["num_classes"],
-        dropout=CONFIG["model"]["dropout"],
-        hidden_dim=CONFIG["model"]["hidden_dim"],
-        pretrained=True,
-        freeze_backbone=False,
-    )
+        # Try to find / download the checkpoint first, so ImageNet weights are only
+        # fetched when they are really needed (a trained checkpoint overwrites them).
+        checkpoint_path = checkpoint_path_for(architecture)
+        if not checkpoint_path.exists():
+            base_url = os.environ.get("MODEL_WEIGHTS_BASE_URL")
+            if base_url and not download_weights(f"{base_url.rstrip('/')}/best_{architecture}.pth", checkpoint_path):
+                hf_download_failed.add(architecture)
+        if not checkpoint_path.exists():
+            repo_id = os.environ.get("HF_MODEL_REPO")
+            if repo_id:
+                try:
+                    from huggingface_hub import hf_hub_download
+                    hf_hub_download(
+                        repo_id=repo_id,
+                        filename=f"best_{architecture}.pth",
+                        local_dir=str(checkpoint_path.parent),
+                        token=os.environ.get("HF_TOKEN"),
+                    )
+                except Exception as e:
+                    hf_download_failed.add(architecture)
+                    print(f"[Web] Could not download weights from {repo_id}: {e}")
 
-    # Try to load checkpoint
-    checkpoint_path = PROJECT_ROOT / CONFIG["training"]["checkpoint_dir"] / f"best_{architecture}.pth"
-    if not checkpoint_path.exists():
-        repo_id = os.environ.get("HF_MODEL_REPO")
-        if repo_id:
-            try:
-                from huggingface_hub import hf_hub_download
-                hf_hub_download(
-                    repo_id=repo_id,
-                    filename=f"best_{architecture}.pth",
-                    local_dir=str(checkpoint_path.parent),
-                    token=os.environ.get("HF_TOKEN"),
-                )
-            except Exception as e:
-                print(f"[Web] Could not download weights from {repo_id}: {e}")
-    if checkpoint_path.exists():
-        checkpoint = load_checkpoint(model, str(checkpoint_path), DEVICE)
-        print(f"[Web] Loaded trained checkpoint for {architecture}")
+        model, target_layer = get_model(
+            architecture=architecture,
+            num_classes=CONFIG["model"]["num_classes"],
+            dropout=CONFIG["model"]["dropout"],
+            hidden_dim=CONFIG["model"]["hidden_dim"],
+            pretrained=not checkpoint_path.exists(),
+            freeze_backbone=False,
+        )
 
-        # Pick up a fitted temperature-scaling factor if calibrate.py has been
-        # run for this architecture, so predictions shown in the UI report a
-        # calibrated (trustworthy) confidence instead of a raw, often
-        # overconfident softmax value.
-        temperature = 1.0
-        calib_path = PROJECT_ROOT / CONFIG["evaluation"]["plots_dir"] / f"calibration_{architecture}.json"
-        if calib_path.exists():
-            with open(calib_path, "r") as f:
-                temperature = json.load(f).get("temperature", 1.0)
-            print(f"[Web] Loaded calibration for {architecture}: temperature={temperature:.3f}")
+        if checkpoint_path.exists():
+            checkpoint = load_checkpoint(model, str(checkpoint_path), DEVICE)
+            print(f"[Web] Loaded trained checkpoint for {architecture}")
 
-        model_status_cache[architecture] = {
-            "trained": True,
-            "source": "trained_checkpoint",
-            "checkpoint_path": str(checkpoint_path),
-            "epoch": checkpoint.get("epoch") if isinstance(checkpoint, dict) else None,
-            "temperature": temperature,
-            "calibrated": calib_path.exists(),
-        }
-    else:
-        # IMPORTANT: the classifier head here is randomly initialized (only the
-        # backbone is ImageNet-pretrained). Predictions from this fallback are
-        # not meaningful for defect classification — every route that surfaces
-        # predictions or metrics must check this status before showing them
-        # as trustworthy.
-        print(f"[Web] No checkpoint found for {architecture} — using pretrained ImageNet weights")
-        print(f"      Expected: {checkpoint_path}")
-        print(f"      Train a model first: python src/train.py --architecture {architecture}")
-        model_status_cache[architecture] = {
-            "trained": False,
-            "source": "imagenet_backbone_untrained_head",
-            "checkpoint_path": str(checkpoint_path),
-            "epoch": None,
-            "temperature": 1.0,
-            "calibrated": False,
-        }
+            # Pick up a fitted temperature-scaling factor if calibrate.py has been
+            # run for this architecture, so predictions shown in the UI report a
+            # calibrated (trustworthy) confidence instead of a raw, often
+            # overconfident softmax value.
+            temperature = 1.0
+            calib_path = PROJECT_ROOT / CONFIG["evaluation"]["plots_dir"] / f"calibration_{architecture}.json"
+            if calib_path.exists():
+                with open(calib_path, "r") as f:
+                    temperature = json.load(f).get("temperature", 1.0)
+                print(f"[Web] Loaded calibration for {architecture}: temperature={temperature:.3f}")
 
-    model = model.to(DEVICE)
-    model.eval()
+            model_status_cache[architecture] = {
+                "trained": True,
+                "source": "trained_checkpoint",
+                "checkpoint_path": str(checkpoint_path),
+                "epoch": checkpoint.get("epoch") if isinstance(checkpoint, dict) else None,
+                "temperature": temperature,
+                "calibrated": calib_path.exists(),
+            }
+        else:
+            # IMPORTANT: the classifier head here is randomly initialized (only the
+            # backbone is ImageNet-pretrained). Predictions from this fallback are
+            # not meaningful for defect classification — every route that surfaces
+            # predictions or metrics must check this status before showing them
+            # as trustworthy.
+            print(f"[Web] No checkpoint found for {architecture} — using pretrained ImageNet weights")
+            print(f"      Expected: {checkpoint_path}")
+            print(f"      Train a model first: python src/train.py --architecture {architecture}")
+            model_status_cache[architecture] = {
+                "trained": False,
+                "source": "imagenet_backbone_untrained_head",
+                "checkpoint_path": str(checkpoint_path),
+                "epoch": None,
+                "temperature": 1.0,
+                "calibrated": False,
+            }
 
-    model_cache[architecture] = (model, target_layer)
-    return model, target_layer
+        model = model.to(DEVICE)
+        model.eval()
+
+        model_cache[architecture] = (model, target_layer)
+        return model, target_layer
 
 
 def get_model_status(architecture: str) -> dict:
@@ -185,9 +268,21 @@ def inject_model_status():
     """
     default_arch = CONFIG["model"]["architecture"] if CONFIG else None
     status = model_status_cache.get(default_arch, {}) if default_arch else {}
+    architectures = []
+    for arch_id, label in (ARCHITECTURES if CONFIG else []):
+        available = arch_available(arch_id)
+        architectures.append({
+            "id": arch_id,
+            "label": label,
+            "available": available,
+            "default": arch_id == default_arch,
+            "option_text": label + (" (default)" if arch_id == default_arch else "")
+                           + ("" if available else " — no trained checkpoint"),
+        })
     return {
         "site_model_trained": bool(status.get("trained")),
         "site_default_architecture": default_arch,
+        "architectures": architectures,
     }
 
 
@@ -196,13 +291,16 @@ def inject_model_status():
 # ============================================================
 ood_model_cache = None
 ood_ref_embedding = None
+ood_load_failed = False   # don't retry a failed weights download on every request
 
 def get_ood_model_and_ref():
     """Lazily loads a lightweight feature extractor for robust OOD detection."""
-    global ood_model_cache, ood_ref_embedding
+    global ood_model_cache, ood_ref_embedding, ood_load_failed
     if ood_model_cache is not None:
         return ood_model_cache, ood_ref_embedding
-        
+    if ood_load_failed:
+        raise RuntimeError("OOD feature extractor unavailable (weights could not be loaded)")
+
     import torch
     import torch.nn.functional as F
     import torchvision.models as models
@@ -212,7 +310,11 @@ def get_ood_model_and_ref():
     
     print("[Web] Loading robust OOD Anomaly Detector...")
     # Load lightweight MobileNetV3
-    ood_model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+    try:
+        ood_model = models.mobilenet_v3_small(weights=models.MobileNet_V3_Small_Weights.DEFAULT)
+    except Exception:
+        ood_load_failed = True
+        raise
     ood_model.classifier = torch.nn.Identity()
     ood_model.eval()
     ood_model.to(DEVICE)
@@ -247,8 +349,221 @@ def get_ood_model_and_ref():
     return ood_model_cache, ood_ref_embedding
 
 # ============================================================
+# Request helpers
+# ============================================================
+
+def ensure_initialized():
+    """Lazy init so the app also works under gunicorn / flask run (not only __main__)."""
+    if CONFIG is None:
+        with init_lock:
+            if CONFIG is None:
+                init_app()
+
+
+@app.before_request
+def _ensure_initialized():
+    ensure_initialized()
+
+
+@app.errorhandler(ApiError)
+def handle_api_error(err):
+    return jsonify({"error": err.message, "success": False}), err.status
+
+
+@app.errorhandler(413)
+def handle_too_large(_err):
+    return jsonify({"error": "Upload too large. Please send smaller images.", "success": False}), 413
+
+
+def per_file_limit_bytes() -> int:
+    return int(CONFIG["web"].get("max_content_length", 16)) * 1024 * 1024
+
+
+def decode_image(data: bytes, filename: str) -> Image.Image:
+    """Validate and decode one uploaded image (EXIF-rotation applied, RGB)."""
+    ext = Path(filename or "").suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXTS:
+        raise ApiError(f"Unsupported file type: {ext or 'none'}. Allowed: {sorted(ALLOWED_IMAGE_EXTS)}")
+    if len(data) > per_file_limit_bytes():
+        raise ApiError(f"{filename}: file is larger than {CONFIG['web'].get('max_content_length', 16)} MB.", 413)
+    try:
+        image = Image.open(BytesIO(data))
+        image = ImageOps.exif_transpose(image)   # phone photos carry a rotation tag
+        return image.convert("RGB")
+    except Exception:
+        raise ApiError(f"{filename}: could not read this file as an image.")
+
+
+def read_single_upload(field: str = "image") -> Image.Image:
+    if field not in request.files:
+        raise ApiError("No image file provided")
+    file = request.files[field]
+    if file.filename == "":
+        raise ApiError("No file selected")
+    return decode_image(file.read(), file.filename)
+
+
+def parse_params(default_gradcam: bool = True) -> dict:
+    """Read + validate the optional form fields shared by the inference endpoints."""
+    architecture = request.form.get("architecture", CONFIG["model"]["architecture"])
+    if architecture not in {a for a, _ in ARCHITECTURES} | {CONFIG["model"]["architecture"]}:
+        raise ApiError(f"Unknown architecture: {architecture}")
+    try:
+        threshold = float(request.form.get("threshold", 0.65))
+    except (TypeError, ValueError):
+        raise ApiError("threshold must be a number between 0 and 1")
+    if not (0.0 <= threshold <= 1.0):
+        raise ApiError("threshold must be between 0 and 1")
+    gradcam_raw = request.form.get("gradcam")
+    return {
+        "architecture": architecture,
+        "threshold": threshold,
+        "auto_orient": request.form.get("auto_orient", "true").lower() != "false",
+        "with_gradcam": default_gradcam if gradcam_raw is None else gradcam_raw.lower() != "false",
+        "bypass_ood": request.form.get("bypass_ood") == "true",
+    }
+
+
+def ood_limits():
+    """(reject_below, warn_below) similarity limits; override in configs/config.yaml under `web:`."""
+    web = CONFIG.get("web", {})
+    return float(web.get("ood_reject_below", 0.30)), float(web.get("ood_warn_below", 0.50))
+
+
+def ood_check(image: Image.Image, info: dict = None):
+    """
+    Return an error message if the image does not look like a transistor, else None.
+
+    The feature-similarity test takes the best of the four 90-degree rotations so a
+    sideways part cannot be rejected just for its orientation. Photos that merely look
+    *different* from the training photos (other package, other background) are no longer
+    rejected outright: between the two limits they are analysed with a warning.
+    If `info` is given it is filled with {"similarity": float, "warning": str}.
+    """
+    img_array = np.array(image)
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+
+    # 1. Basic image quality check
+    std_dev = np.std(gray)
+    mean_val = np.mean(gray)
+    if std_dev > 80 or std_dev < 5 or mean_val < 10 or mean_val > 240:
+        return "Image appears to be out-of-domain (too uniform, dark, or bright). Please upload an image of a transistor."
+
+    # 2. Advanced Anomaly Detection (Cosine Similarity)
+    try:
+        import torch.nn.functional as F
+        (ood_model, transform), ref_emb = get_ood_model_and_ref()
+
+        if ref_emb is not None:
+            img_tensor = transform(image).unsqueeze(0).to(DEVICE)
+            batch = torch.cat([torch.rot90(img_tensor, k, dims=(2, 3)) for k in range(4)])
+            with inference_lock, torch.no_grad():
+                feats = ood_model(batch)
+                feats_norm = F.normalize(feats, p=2, dim=1)
+                similarity = torch.sum(feats_norm * ref_emb, dim=1).max().item()
+
+            # Usually similarity > 0.6 for training-style photos; real-world photos of genuine
+            # transistors often land around 0.4-0.5, while unrelated objects score far lower.
+            reject_below, warn_below = ood_limits()
+            if info is not None:
+                info["similarity"] = round(similarity, 3)
+            if similarity < reject_below:
+                return f"Object does not match a transistor (Similarity: {similarity:.2f}). Please scan a transistor."
+            if similarity < warn_below and info is not None:
+                info["warning"] = (f"This photo looks quite different from the training images (similarity {similarity:.2f}) — "
+                                   "a different package or background — so the verdict may be less reliable.")
+        return None
+    except Exception as e:
+        if not ood_load_failed:
+            traceback.print_exc()
+        else:
+            print(f"[Web] OOD feature check unavailable, using OpenCV fallback ({e})")
+        # Fallback to OpenCV checks if torch OOD fails...
+        circles = cv2.HoughCircles(
+            gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=10,
+            param1=50, param2=30, minRadius=2, maxRadius=30
+        )
+        num_circles = len(circles[0]) if circles is not None else 0
+        if num_circles < 5:
+            _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                cnt = max(contours, key=cv2.contourArea)
+                rect = cv2.minAreaRect(cnt)
+                (x, y), (w, h), angle = rect
+                if w > 0 and h > 0:
+                    aspect_ratio = max(w / h, h / w)
+                    area = w * h
+                    if aspect_ratio > 2.5:
+                        return "Object shape does not match a transistor (too elongated like a fork or cable). Please scan a transistor."
+                    if area < (gray.shape[0] * gray.shape[1] * 0.01):
+                        return "No significant object detected. Please move closer."
+        return None
+
+
+def prepare_image(image: Image.Image, use_auto_orient: bool):
+    """Make sideways / upside-down transistors upright before anything else sees them."""
+    if use_auto_orient:
+        return auto_orient(image)
+    return image, {"applied": False, "rotation_deg": 0, "leads_pointing": None, "confidence": 0.0,
+                   "reason": "auto-orient turned off", "body_box": None, "lead_box": None}
+
+
+def run_model(image, architecture, threshold, with_gradcam=True):
+    """Run one model; returns (response_fields, raw_result). `image` must already be oriented."""
+    with inference_lock:
+        model, target_layer = get_or_load_model(architecture)
+        status = get_model_status(architecture)
+        result = predict_with_gradcam(
+            model=model,
+            image=image,
+            target_layer=target_layer,
+            device=str(DEVICE),
+            image_size=CONFIG["dataset"]["image_size"],
+            temperature=status.get("temperature", 1.0),
+            auto_orient=False,           # already handled by prepare_image()
+            with_gradcam=with_gradcam,
+        )
+
+    p_def = result["probabilities"]["defective"]
+    # Determine status based on threshold slider
+    is_defective = p_def >= threshold
+    fields = {
+        "prediction": "Defective" if is_defective else "Good",
+        "confidence": round(result["confidence"], 4),
+        "probabilities": {k: round(v, 4) for k, v in result["probabilities"].items()},
+        "is_defective": bool(is_defective),
+        # Flag low-margin predictions as uncertain
+        "is_uncertain": bool(abs(p_def - threshold) < 0.10),
+        "threshold": threshold,
+        "architecture": architecture,
+        "model_trained": status["trained"],
+        "calibrated": status.get("calibrated", False),
+    }
+    return fields, result
+
+
+def small_jpeg_b64(image: Image.Image, side: int = 96) -> str:
+    thumb = image.copy()
+    thumb.thumbnail((side, side))
+    buf = BytesIO()
+    thumb.convert("RGB").save(buf, format="JPEG", quality=70)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+# ============================================================
 # Routes
 # ============================================================
+
+def list_examples():
+    examples_dir = PROJECT_ROOT / "web" / "examples"
+    examples = []
+    if examples_dir.exists():
+        for img_path in sorted(examples_dir.glob("*")):
+            if img_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
+                examples.append(img_path.name)
+    return examples
+
 
 @app.route("/")
 def index():
@@ -260,16 +575,9 @@ def index():
 @app.route("/detect")
 def detect():
     """Detection / upload page."""
-    # Get example images
-    examples_dir = PROJECT_ROOT / "web" / "examples"
-    examples = []
-    if examples_dir.exists():
-        for img_path in sorted(examples_dir.glob("*")):
-            if img_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
-                examples.append(img_path.name)
     default_arch = CONFIG["model"]["architecture"]
     model_status = get_model_status(default_arch)
-    return render_template("detect.html", examples=examples, model_status=model_status)
+    return render_template("detect.html", examples=list_examples(), model_status=model_status)
 
 
 @app.route("/realtime")
@@ -278,6 +586,38 @@ def realtime():
     default_arch = CONFIG["model"]["architecture"]
     model_status = get_model_status(default_arch)
     return render_template("realtime.html", model_status=model_status)
+
+
+@app.route("/batch")
+def batch_page():
+    """Batch inspection + report page."""
+    default_arch = CONFIG["model"]["architecture"]
+    return render_template("batch.html", model_status=get_model_status(default_arch),
+                           batch_max=BATCH_MAX_IMAGES)
+
+
+@app.route("/compare")
+def compare_page():
+    """Three-model consensus page."""
+    default_arch = CONFIG["model"]["architecture"]
+    return render_template("compare.html", examples=list_examples(),
+                           model_status=get_model_status(default_arch))
+
+
+@app.route("/lab")
+def lab_page():
+    """Robustness lab."""
+    default_arch = CONFIG["model"]["architecture"]
+    return render_template("lab.html", examples=list_examples(),
+                           model_status=get_model_status(default_arch))
+
+
+@app.route("/line")
+def line_page():
+    """Production-line simulator."""
+    default_arch = CONFIG["model"]["architecture"]
+    return render_template("line.html", examples=list_examples(),
+                           model_status=get_model_status(default_arch))
 
 
 @app.route("/dashboard")
@@ -309,139 +649,224 @@ def about():
 def api_predict():
     """
     Run inference on an uploaded image.
-    
+
     Accepts: multipart/form-data with 'image' file field.
-    Optional: 'architecture' (string), 'threshold' (float).
-    
-    Returns: JSON with prediction, confidence, probabilities, and
-             base64-encoded Grad-CAM images.
+    Optional: 'architecture' (string), 'threshold' (float 0-1),
+              'auto_orient' ("false" to disable the sideways-transistor fix),
+              'gradcam' ("false" to skip the heat-map for fast screening),
+              'bypass_ood' ("true").
+
+    Returns: JSON with prediction, confidence, probabilities, orientation info,
+             a suspected-defect diagnosis and base64-encoded Grad-CAM images.
     """
     try:
-        # Validate input
-        if "image" not in request.files:
-            return jsonify({"error": "No image file provided"}), 400
+        image = read_single_upload("image")
+        params = parse_params()
+        image, orientation = prepare_image(image, params["auto_orient"])
 
-        file = request.files["image"]
-        if file.filename == "":
-            return jsonify({"error": "No file selected"}), 400
+        ood_info = {}
+        if not params["bypass_ood"]:
+            problem = ood_check(image, ood_info)
+            if problem:
+                return jsonify({"error": problem, "success": False, "orientation": orientation,
+                                "ood_rejected": True, "ood_similarity": ood_info.get("similarity")}), 400
 
-        # Check file extension
-        allowed = {".png", ".jpg", ".jpeg", ".bmp", ".tiff"}
-        ext = Path(file.filename).suffix.lower()
-        if ext not in allowed:
-            return jsonify({"error": f"Unsupported file type: {ext}. Allowed: {allowed}"}), 400
+        fields, result = run_model(image, params["architecture"], params["threshold"], params["with_gradcam"])
 
-        # Load image
-        image_bytes = file.read()
-        image = Image.open(BytesIO(image_bytes)).convert("RGB")
-
-        # OOD Check
-        import numpy as np
-        import cv2
-        bypass_ood = request.form.get("bypass_ood") == "true"
-        if not bypass_ood:
-            # 1. Basic image quality check
-            img_array = np.array(image)
-            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            
-            std_dev = np.std(gray)
-            mean_val = np.mean(gray)
-            
-            if std_dev > 80 or std_dev < 5 or mean_val < 10 or mean_val > 240:
-                return jsonify({"error": "Image appears to be out-of-domain (too uniform, dark, or bright). Please upload an image of a transistor.", "success": False}), 400
-                
-            # 2. Advanced Anomaly Detection (Cosine Similarity)
-            try:
-                import torch
-                import torch.nn.functional as F
-                (ood_model, transform), ref_emb = get_ood_model_and_ref()
-                
-                if ref_emb is not None:
-                    img_tensor = transform(image).unsqueeze(0).to(DEVICE)
-                    with torch.no_grad():
-                        feats = ood_model(img_tensor)
-                        feats_norm = F.normalize(feats, p=2, dim=1)
-                        # Compute cosine similarity with reference
-                        similarity = torch.sum(feats_norm * ref_emb).item()
-                        
-                    # Usually similarity > 0.6 for in-domain, < 0.4 for completely different objects (faces, forks)
-                    if similarity < 0.40:
-                        return jsonify({"error": f"Object does not match a transistor (Similarity: {similarity:.2f}). Please scan a transistor.", "success": False}), 400
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                # Fallback to OpenCV checks if torch OOD fails...
-                circles = cv2.HoughCircles(
-                    gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=10, 
-                    param1=50, param2=30, minRadius=2, maxRadius=30
-                )
-                num_circles = len(circles[0]) if circles is not None else 0
-                if num_circles < 5:
-                    _, thresh = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY_INV)
-                    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    if contours:
-                        cnt = max(contours, key=cv2.contourArea)
-                        rect = cv2.minAreaRect(cnt)
-                        (x, y), (w, h), angle = rect
-                        if w > 0 and h > 0:
-                            aspect_ratio = max(w/h, h/w)
-                            area = w * h
-                            if aspect_ratio > 2.5:
-                                return jsonify({"error": "Object shape does not match a transistor (too elongated like a fork or cable). Please scan a transistor.", "success": False}), 400
-                            if area < (gray.shape[0] * gray.shape[1] * 0.01):
-                                return jsonify({"error": "No significant object detected. Please move closer.", "success": False}), 400
-
-        # Get parameters
-        architecture = request.form.get("architecture", CONFIG["model"]["architecture"])
-        threshold = float(request.form.get("threshold", 0.65))
-
-        # Load model
-        model, target_layer = get_or_load_model(architecture)
-        status = get_model_status(architecture)
-
-        # Run inference with Grad-CAM
-        result = predict_with_gradcam(
-            model=model,
-            image=image,
-            target_layer=target_layer,
-            device=str(DEVICE),
-            image_size=CONFIG["dataset"]["image_size"],
-            temperature=status.get("temperature", 1.0),
-        )
-
-        # Determine status based on threshold slider
-        is_defective = result["probabilities"]["defective"] >= threshold
-        prediction_text = "Defective" if is_defective else "Good"
-
-        # Flag low-margin predictions as uncertain
-        margin = abs(result["probabilities"]["defective"] - threshold)
-        is_uncertain = margin < 0.10
-
-        # Build response
-        response = {
-            "success": True,
-            "prediction": prediction_text,
-            "confidence": round(result["confidence"], 4),
-            "probabilities": {
-                k: round(v, 4) for k, v in result["probabilities"].items()
-            },
-            "is_defective": is_defective,
-            "is_uncertain": is_uncertain,
-            "threshold": threshold,
-            "architecture": architecture,
-            "model_trained": status["trained"],
-            "calibrated": status.get("calibrated", False),
-            "original_image": image_to_base64(result["original_image"]),
-            "heatmap": image_to_base64(result["heatmap"]),
-            "overlay": image_to_base64(result["overlay"]),
-        }
-
+        response = {"success": True, **fields, "orientation": orientation, "diagnosis": None,
+                    "ood": {"similarity": ood_info.get("similarity"), "warning": ood_info.get("warning")}}
+        if params["with_gradcam"]:
+            response["original_image"] = image_to_base64(result["original_image"])
+            response["heatmap"] = image_to_base64(result["heatmap"])
+            response["overlay"] = image_to_base64(result["overlay"])
+            if fields["is_defective"]:
+                response["diagnosis"] = diagnose(result["original_image"], result["heatmap_raw"])
         return jsonify(response)
 
+    except ApiError:
+        raise
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e), "success": False}), 500
 
+
+def _collect_batch_items():
+    """Gather (name, bytes) pairs from multiple uploaded images and/or zip archives."""
+    items = []
+    for f in request.files.getlist("images"):
+        name = f.filename or "image"
+        data = f.read()
+        if Path(name).suffix.lower() == ".zip":
+            try:
+                zf = zipfile.ZipFile(BytesIO(data))
+            except zipfile.BadZipFile:
+                items.append((name, None))
+                continue
+            total = 0
+            for info in zf.infolist():
+                base = Path(info.filename).name
+                if info.is_dir() or info.filename.startswith("__MACOSX") or base.startswith("."):
+                    continue
+                if Path(base).suffix.lower() not in ALLOWED_IMAGE_EXTS:
+                    continue
+                total += info.file_size
+                if info.file_size > per_file_limit_bytes() or total > 200 * 1024 * 1024:
+                    items.append((base, None))
+                    continue
+                items.append((base, zf.read(info)))
+                if len(items) > BATCH_MAX_IMAGES:
+                    break
+        else:
+            items.append((name, data))
+        if len(items) > BATCH_MAX_IMAGES:
+            break
+    return items
+
+
+@app.route("/api/batch", methods=["POST"])
+def api_batch():
+    """
+    Inspect many images at once (multiple files and/or a .zip).
+    Returns per-image results plus a summary (yield %, defect-type Pareto, ...).
+    """
+    try:
+        params = parse_params(default_gradcam=False)
+        items = _collect_batch_items()
+        if not items:
+            raise ApiError("No images provided. Upload images or a .zip of images.")
+        truncated = len(items) > BATCH_MAX_IMAGES
+        items = items[:BATCH_MAX_IMAGES]
+
+        rows = []
+        started = time.monotonic()
+        for name, data in items:
+            row = {"filename": name}
+            if time.monotonic() - started > BATCH_TIME_BUDGET_S:
+                row.update(status="skipped", message="Time budget for one request reached — please run this image again.")
+                rows.append(row)
+                continue
+            try:
+                if data is None:
+                    raise ApiError("Could not read this file (corrupt or too large).")
+                image = decode_image(data, name)
+                image, orientation = prepare_image(image, params["auto_orient"])
+                row["rotated"] = bool(orientation["applied"])
+                row["rotation_deg"] = orientation["rotation_deg"]
+                row["thumb"] = small_jpeg_b64(image)
+
+                ood_info = {}
+                problem = None if params["bypass_ood"] else ood_check(image, ood_info)
+                if ood_info.get("warning"):
+                    row["ood_warning"] = ood_info["warning"]
+                if problem:
+                    row.update(status="rejected", message=problem)
+                else:
+                    fields, _ = run_model(image, params["architecture"], params["threshold"], with_gradcam=False)
+                    row.update(status="ok", prediction=fields["prediction"],
+                               p_defective=fields["probabilities"]["defective"],
+                               confidence=fields["confidence"], is_uncertain=fields["is_uncertain"],
+                               suspected_type=None, suspected_label=None)
+                    if fields["is_defective"]:
+                        _, full = run_model(image, params["architecture"], params["threshold"], with_gradcam=True)
+                        diag = diagnose(full["original_image"], full["heatmap_raw"])
+                        if diag:
+                            row["suspected_type"] = diag["type"]
+                            row["suspected_label"] = diag["label"]
+            except ApiError as e:
+                row.update(status="error", message=e.message)
+            except Exception as e:  # one bad image must not sink the whole batch
+                traceback.print_exc()
+                row.update(status="error", message=str(e))
+            rows.append(row)
+
+        ok = [r for r in rows if r["status"] == "ok"]
+        defective = [r for r in ok if r["prediction"] == "Defective"]
+        types = {}
+        for r in defective:
+            key = r.get("suspected_label") or "Defect not localised"
+            types[key] = types.get(key, 0) + 1
+        status = get_model_status(params["architecture"])
+        summary = {
+            "total": len(rows),
+            "analysed": len(ok),
+            "good": len(ok) - len(defective),
+            "defective": len(defective),
+            "rejected": sum(1 for r in rows if r["status"] == "rejected"),
+            "errors": sum(1 for r in rows if r["status"] == "error"),
+            "skipped": sum(1 for r in rows if r["status"] == "skipped"),
+            "uncertain": sum(1 for r in ok if r["is_uncertain"]),
+            "rotated": sum(1 for r in rows if r.get("rotated")),
+            "yield_pct": round(100.0 * (len(ok) - len(defective)) / len(ok), 1) if ok else None,
+            "defect_types": dict(sorted(types.items(), key=lambda kv: kv[1], reverse=True)),
+            "truncated": truncated,
+            "max_images": BATCH_MAX_IMAGES,
+        }
+        return jsonify({
+            "success": True, "results": rows, "summary": summary,
+            "architecture": params["architecture"], "threshold": params["threshold"],
+            "model_trained": status["trained"],
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+    except ApiError:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/compare", methods=["POST"])
+def api_compare():
+    """
+    Run every trained model on one image and report their consensus.
+    Architectures without a trained checkpoint are listed but excluded from the vote.
+    """
+    try:
+        image = read_single_upload("image")
+        params = parse_params()
+        image, orientation = prepare_image(image, params["auto_orient"])
+        ood_info = {}
+        if not params["bypass_ood"]:
+            problem = ood_check(image, ood_info)
+            if problem:
+                return jsonify({"error": problem, "success": False, "orientation": orientation,
+                                "ood_rejected": True, "ood_similarity": ood_info.get("similarity")}), 400
+
+        models_out = []
+        for arch_id, label in ARCHITECTURES:
+            entry = {"architecture": arch_id, "label": label}
+            if not arch_available(arch_id) or not get_model_status(arch_id)["trained"]:
+                entry.update(status="no_checkpoint")
+                models_out.append(entry)
+                continue
+            fields, result = run_model(image, arch_id, params["threshold"], with_gradcam=True)
+            entry.update(status="ok", **fields,
+                         original_image=image_to_base64(result["original_image"]),
+                         overlay=image_to_base64(result["overlay"]))
+            models_out.append(entry)
+
+        voters = [m for m in models_out if m["status"] == "ok"]
+        consensus = None
+        if voters:
+            n_def = sum(1 for m in voters if m["is_defective"])
+            n_good = len(voters) - n_def
+            verdict = "Defective" if n_def > n_good else "Good" if n_good > n_def else "Split decision"
+            consensus = {
+                "verdict": verdict,
+                "votes_defective": n_def,
+                "votes_good": n_good,
+                "voters": len(voters),
+                "unanimous": n_def == 0 or n_good == 0,
+                "needs_review": not (n_def == 0 or n_good == 0) or any(m["is_uncertain"] for m in voters),
+                "mean_p_defective": round(sum(m["probabilities"]["defective"] for m in voters) / len(voters), 4),
+            }
+        return jsonify({"success": True, "models": models_out, "consensus": consensus,
+                        "orientation": orientation, "threshold": params["threshold"],
+                        "ood": {"similarity": ood_info.get("similarity"), "warning": ood_info.get("warning")}})
+    except ApiError:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "success": False}), 500
 
 
 @app.route("/api/health")
@@ -489,6 +914,10 @@ def init_app():
     CONFIG = load_config()
     DEVICE = get_device()
 
+    # Server-side request cap (single images are limited per-file in decode_image();
+    # the overall cap leaves room for batch uploads).
+    app.config["MAX_CONTENT_LENGTH"] = int(CONFIG["web"].get("max_content_length", 16)) * 6 * 1024 * 1024
+
     # Pre-load the default model
     default_arch = CONFIG["model"]["architecture"]
     print(f"\n[Web] Pre-loading default model: {default_arch}")
@@ -503,6 +932,7 @@ if __name__ == "__main__":
     init_app()
     app.run(
         host=CONFIG["web"]["host"],
-        port=CONFIG["web"]["port"],
+        # Cloud Run passes the container port in $PORT; locally the config value is used.
+        port=int(os.environ.get("PORT", CONFIG["web"]["port"])),
         debug=CONFIG["web"]["debug"],
     )

@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Model Consensus — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+<section class="tool-section">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Consensus</span>
+            <h1 class="section-title">Three-Model Consensus</h1>
+            <p class="section-subtitle">Run every trained model on the same part. Agreement raises confidence; disagreement flags the part for human review.</p>
+        </div>
+
+        <div class="tool-grid">
+            <div class="glass-card detect-panel">
+                <h3 class="panel-title">Image</h3>
+                <div class="tool-stack">
+                    <div class="drop-zone" id="dropZone" tabindex="0" role="button" aria-label="Choose an image">
+                        <img id="preview" alt="" style="display:none; max-width:100%; max-height:200px; border-radius:6px; margin:0 auto 8px;">
+                        <p id="dropText"><strong>Drop an image here</strong><br><span class="tool-note">or click to browse</span></p>
+                    </div>
+                    <input type="file" id="fileInput" accept="image/png,image/jpeg,image/bmp,image/tiff" style="display:none;">
+                    <div class="control-group">
+                        <label for="thresholdSlider">Confidence Threshold: <span id="thresholdValue">0.65</span></label>
+                        <input type="range" id="thresholdSlider" min="0.01" max="0.99" step="0.01" value="0.65" class="form-range">
+                    </div>
+                    <label class="checkbox-row" for="autoOrientToggle">
+                        <input type="checkbox" id="autoOrientToggle" checked>
+                        <span>Auto-orient sideways transistors</span>
+                    </label>
+                    <button class="btn btn-primary btn-lg btn-block" id="runBtn" disabled>Run all models</button>
+                    <p class="tool-note" id="status"></p>
+                    {% if examples %}
+                    <div class="examples-section">
+                        <p class="examples-label">Or try an example:</p>
+                        <div class="examples-grid">
+                            {% for example in examples %}
+                            <button class="example-thumb" type="button" data-src="/examples/{{ example }}" title="{{ example }}"><img src="/examples/{{ example }}" alt="{{ example }}" loading="lazy"></button>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="glass-card detect-panel">
+                <h3 class="panel-title">Verdicts</h3>
+                <p class="tool-note" id="empty">Run the models to see their votes side by side.</p>
+                <div id="out" style="display:none;">
+                    <div class="consensus-banner" id="banner"></div>
+                    <div class="model-cards" id="cards"></div>
+                    <p class="tool-note" style="margin-top:12px;">Models without a trained checkpoint on this server are listed but never vote — an untrained network would only add noise.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/tools.js') }}"></script>
+<script>
+(function () {
+    const T = window.DefectTools;
+    const $ = (id) => document.getElementById(id);
+    const dropZone = $('dropZone'), fileInput = $('fileInput'), runBtn = $('runBtn');
+    const slider = $('thresholdSlider');
+    let file = null;
+
+    slider.addEventListener('input', () => { $('thresholdValue').textContent = parseFloat(slider.value).toFixed(2); });
+
+    function setFile(f) {
+        file = f;
+        const reader = new FileReader();
+        reader.onload = (e) => { $('preview').src = e.target.result; $('preview').style.display = 'block'; $('dropText').style.display = 'none'; };
+        reader.readAsDataURL(f);
+        runBtn.disabled = false;
+    }
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
+    fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+    ['dragenter', 'dragover'].forEach((ev) => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.add('drag'); }));
+    ['dragleave', 'drop'].forEach((ev) => dropZone.addEventListener(ev, (e) => { e.preventDefault(); dropZone.classList.remove('drag'); }));
+    dropZone.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
+    document.querySelectorAll('.example-thumb').forEach((b) => b.addEventListener('click', async () => {
+        try { setFile(await T.urlToFile(b.dataset.src)); } catch (e) { $('status').textContent = '⚠ ' + e.message; }
+    }));
+
+    runBtn.addEventListener('click', async () => {
+        if (!file) return;
+        runBtn.disabled = true; runBtn.textContent = 'Running models…'; $('status').textContent = '';
+        const r = await T.postImage('/api/compare', file, file.name, {
+            threshold: slider.value, auto_orient: $('autoOrientToggle').checked ? 'true' : 'false'
+        });
+        runBtn.disabled = false; runBtn.textContent = 'Run all models';
+        if (!r.ok) { $('status').textContent = '⚠ ' + (r.data.error || 'Request failed'); return; }
+        render(r.data);
+    });
+
+    function render(d) {
+        $('empty').style.display = 'none'; $('out').style.display = 'block';
+        const w = d.ood && d.ood.warning;
+        $('status').textContent = w ? '⚠ ' + w : '';
+        const c = d.consensus, banner = $('banner');
+        if (!c) {
+            banner.className = 'consensus-banner split';
+            banner.innerHTML = '<h3>No trained models available</h3><p>None of the architectures has a trained checkpoint on this server.</p>';
+        } else {
+            const cls = c.verdict === 'Defective' ? 'bad' : c.verdict === 'Good' ? 'good' : 'split';
+            let note;
+            if (c.voters === 1) note = 'Only one trained model is available here, so there is nothing to compare yet.';
+            else if (c.unanimous) note = `All ${c.voters} models agree.`;
+            else note = `Models disagree (${c.votes_defective} defective / ${c.votes_good} good).`;
+            banner.className = 'consensus-banner ' + cls;
+            banner.innerHTML = `<h3>Consensus: ${T.esc(c.verdict)}</h3><p>${T.esc(note)} Mean P(defective) ${(c.mean_p_defective * 100).toFixed(1)}%.` +
+                (c.needs_review ? ' <span class="pill warn">send for human review</span>' : '') + '</p>';
+        }
+        $('cards').innerHTML = d.models.map((m) => {
+            if (m.status !== 'ok') {
+                return `<div class="model-card skipped"><strong>${T.esc(m.label)}</strong><p class="tool-note" style="margin-top:6px;">No trained checkpoint — skipped</p></div>`;
+            }
+            const bad = m.is_defective;
+            return `<div class="model-card"><strong>${T.esc(m.label)}</strong>
+                <div style="margin-top:4px;">${bad ? '<span class="pill bad">Defective</span>' : '<span class="pill ok">Good</span>'}
+                ${m.is_uncertain ? '<span class="pill warn">low margin</span>' : ''}</div>
+                <img alt="Grad-CAM overlay" src="data:image/png;base64,${m.overlay}">
+                <p class="tool-note">P(defective) ${(m.probabilities.defective * 100).toFixed(1)}% · confidence ${(m.confidence * 100).toFixed(1)}%</p></div>`;
+        }).join('');
+    }
+})();
+</script>
+{% endblock %}
