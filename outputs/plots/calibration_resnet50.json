@@ -1,0 +1,8 @@
+{
+  "architecture": "resnet50",
+  "checkpoint": "outputs\\checkpoints\\best_resnet50.pth",
+  "checkpoint_epoch": 7,
+  "temperature": 1.355947732925415,
+  "ece_before": 0.1101,
+  "ece_after": 0.1117
+}
