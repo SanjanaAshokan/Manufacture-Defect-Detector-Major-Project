@@ -184,11 +184,26 @@ def get_or_load_model(architecture: str):
             # calibrated (trustworthy) confidence instead of a raw, often
             # overconfident softmax value.
             temperature = 1.0
+            calibrated = False
             calib_path = PROJECT_ROOT / CONFIG["evaluation"]["plots_dir"] / f"calibration_{architecture}.json"
             if calib_path.exists():
-                with open(calib_path, "r") as f:
-                    temperature = json.load(f).get("temperature", 1.0)
-                print(f"[Web] Loaded calibration for {architecture}: temperature={temperature:.3f}")
+                try:
+                    with open(calib_path, "r") as f:
+                        calibration = json.load(f)
+                    candidate = float(calibration.get("temperature", 1.0))
+                    before = float(calibration["ece_before"])
+                    after = float(calibration["ece_after"])
+                    same_checkpoint = calibration.get("checkpoint_epoch") == (
+                        checkpoint.get("epoch") if isinstance(checkpoint, dict) else None
+                    )
+                    if candidate > 0 and after < before and same_checkpoint:
+                        temperature = candidate
+                        calibrated = True
+                        print(f"[Web] Loaded validated calibration for {architecture}: temperature={temperature:.3f}")
+                    else:
+                        print(f"[Web] Ignoring calibration for {architecture}: it did not improve ECE or does not match this checkpoint")
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    print(f"[Web] Ignoring invalid calibration for {architecture}: {exc}")
 
             model_status_cache[architecture] = {
                 "trained": True,
@@ -196,7 +211,7 @@ def get_or_load_model(architecture: str):
                 "checkpoint_path": str(checkpoint_path),
                 "epoch": checkpoint.get("epoch") if isinstance(checkpoint, dict) else None,
                 "temperature": temperature,
-                "calibrated": calib_path.exists(),
+                "calibrated": calibrated,
             }
         else:
             # IMPORTANT: the classifier head here is randomly initialized (only the
@@ -293,7 +308,19 @@ ood_model_cache = None
 ood_ref_embedding = None
 ood_load_failed = False   # don't retry a failed weights download on every request
 
+ood_lock = threading.Lock()
+ood_extra_refs = None        # embeddings of optional photos in web/ood_references/
+
+
 def get_ood_model_and_ref():
+    """Thread-safe wrapper: the first caller loads the detector, everyone else waits for it."""
+    if ood_model_cache is not None:
+        return ood_model_cache, ood_ref_embedding
+    with ood_lock:
+        return _load_ood_model_and_ref()
+
+
+def _load_ood_model_and_ref():
     """Lazily loads a lightweight feature extractor for robust OOD detection."""
     global ood_model_cache, ood_ref_embedding, ood_load_failed
     if ood_model_cache is not None:
@@ -344,6 +371,24 @@ def get_ood_model_and_ref():
     if embeddings:
         ref = torch.mean(torch.cat(embeddings), dim=0, keepdim=True)
         ood_ref_embedding = F.normalize(ref, p=2, dim=1)
+
+    # Optional extra reference photos (real-world transistors on other backgrounds / packages):
+    # a frame only has to resemble ONE of them, which widens what counts as "a transistor".
+    global ood_extra_refs
+    extra_dir = PROJECT_ROOT / "web" / "ood_references"
+    extra = []
+    if extra_dir.exists():
+        for f in sorted(os.listdir(extra_dir)):
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".bmp")):
+                try:
+                    img = Image.open(extra_dir / f).convert("RGB")
+                    with torch.no_grad():
+                        extra.append(F.normalize(ood_model(transform(img).unsqueeze(0).to(DEVICE)), p=2, dim=1))
+                except Exception:
+                    pass
+    if extra:
+        ood_extra_refs = torch.cat(extra)
+        print(f"[Web] OOD: {len(extra)} extra reference photo(s) loaded from web/ood_references/")
         
     ood_model_cache = (ood_model, transform)
     return ood_model_cache, ood_ref_embedding
@@ -421,24 +466,52 @@ def parse_params(default_gradcam: bool = True) -> dict:
         "auto_orient": request.form.get("auto_orient", "true").lower() != "false",
         "with_gradcam": default_gradcam if gradcam_raw is None else gradcam_raw.lower() != "false",
         "bypass_ood": request.form.get("bypass_ood") == "true",
+        # live camera: stricter "is this a transistor?" rule, because people, faces and
+        # rooms are constantly in front of a webcam
+        "live": request.form.get("live") == "true",
     }
 
 
 def ood_limits():
     """(reject_below, warn_below) similarity limits; override in configs/config.yaml under `web:`."""
     web = CONFIG.get("web", {})
-    return float(web.get("ood_reject_below", 0.30)), float(web.get("ood_warn_below", 0.50))
+    # The previous 0.30 default let clearly unrelated objects through to the defect model.
+    # 0.45 rejects weak matches while retaining the documented 0.40-0.50 range as a warning
+    # when an operator has explicitly configured a lower cutoff.
+    return float(web.get("ood_reject_below", 0.45)), float(web.get("ood_warn_below", 0.50))
 
 
-def ood_check(image: Image.Image, info: dict = None):
+def live_ood_limit() -> float:
+    """
+    Similarity below which a live-camera frame is never analysed. Default 0.40 - exactly the
+    limit the live camera always used. Tune with the OOD_LIVE_REJECT_BELOW environment variable
+    or `ood_live_reject_below` under `web:` in configs/config.yaml.
+    """
+    web = CONFIG.get("web", {})
+    return float(os.environ.get("OOD_LIVE_REJECT_BELOW", web.get("ood_live_reject_below", 0.40)))
+
+
+def has_transistor_geometry(info: dict) -> bool:
+    """Require independent evidence of a transistor body plus visible lead pixels."""
+    return bool(
+        info
+        and info.get("body_box") is not None
+        and (info.get("lead_box") is not None or info.get("lead_evidence"))
+    )
+
+
+def ood_check(image: Image.Image, info: dict = None, strict: bool = False, alt_image: Image.Image = None):
     """
     Return an error message if the image does not look like a transistor, else None.
 
-    The feature-similarity test takes the best of the four 90-degree rotations so a
-    sideways part cannot be rejected just for its orientation. Photos that merely look
-    *different* from the training photos (other package, other background) are no longer
-    rejected outright: between the two limits they are analysed with a warning.
+    The feature-similarity test uses one geometrically normalized view. Taking the best of
+    four rotations inflated unrelated images' scores. Photos that look different from the
+    training photos can still pass with clear transistor body/lead geometry, with a warning.
     If `info` is given it is filled with {"similarity": float, "warning": str}.
+
+    strict=True (live camera): score the frame as-is and reject below the stricter limit.
+    `alt_image` is the same frame before auto-orientation; it is used only when orientation
+    correction was applied.
     """
     img_array = np.array(image)
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
@@ -454,31 +527,79 @@ def ood_check(image: Image.Image, info: dict = None):
         import torch.nn.functional as F
         (ood_model, transform), ref_emb = get_ood_model_and_ref()
 
-        if ref_emb is not None:
-            img_tensor = transform(image).unsqueeze(0).to(DEVICE)
-            batch = torch.cat([torch.rot90(img_tensor, k, dims=(2, 3)) for k in range(4)])
+        if ref_emb is not None or ood_extra_refs is not None:
+            score_image = image
+            geometry = None
+            if strict:
+                _, geometry = auto_orient(image)
+            else:
+                # Normalize only the OOD view. This also works when the user disabled
+                # auto-orient for the defect model, without changing that model's input.
+                score_image, geometry = auto_orient(image)
+            img_tensor = transform(score_image).unsqueeze(0).to(DEVICE)
+            views = [img_tensor]
+            if strict and alt_image is not None:
+                views.append(transform(alt_image).unsqueeze(0).to(DEVICE))
+            batch = torch.cat(views)
             with inference_lock, torch.no_grad():
                 feats = ood_model(batch)
                 feats_norm = F.normalize(feats, p=2, dim=1)
-                similarity = torch.sum(feats_norm * ref_emb, dim=1).max().item()
+                scores = []
+                if ref_emb is not None:
+                    scores.append(torch.sum(feats_norm * ref_emb, dim=1))
+                if ood_extra_refs is not None:
+                    scores.append((feats_norm @ ood_extra_refs.T).flatten())
+                similarity = torch.cat(scores).max().item()
 
             # Usually similarity > 0.6 for training-style photos; real-world photos of genuine
             # transistors often land around 0.4-0.5, while unrelated objects score far lower.
-            reject_below, warn_below = ood_limits()
             if info is not None:
                 info["similarity"] = round(similarity, 3)
-            if similarity < reject_below:
+            if strict:
+                live_reject = live_ood_limit()
+                if info is not None:
+                    info["limit"] = live_reject
+                geometry_ok = has_transistor_geometry(geometry or {})
+                if similarity < live_reject and not geometry_ok:
+                    return (f"Object does not match a transistor (Similarity: {similarity:.2f}, "
+                            f"needs {live_reject:.2f}). Please scan a transistor.")
+                if similarity < max(live_reject, 0.65) and not geometry_ok:
+                    return "Could not verify a transistor in this camera frame. Please scan a transistor."
+                if similarity < max(live_reject, 0.65) and info is not None:
+                    info["warning"] = "Transistor body and leads were detected, but this image differs from the training photos. Review the result carefully."
+                return None
+            reject_below, warn_below = ood_limits()
+            geometry_ok = has_transistor_geometry(geometry or {})
+            if similarity < reject_below and not geometry_ok:
                 return f"Object does not match a transistor (Similarity: {similarity:.2f}). Please scan a transistor."
-            if similarity < warn_below and info is not None:
+            # Borderline visual similarity alone is not enough: screenshots, packaging,
+            # and other objects can share ImageNet features with the tiny reference set.
+            # Require the independent transistor body/lead geometry for these cases.
+            if similarity < max(warn_below, 0.65) and not geometry_ok:
+                return (f"Could not verify a transistor body and leads (Similarity: {similarity:.2f}). "
+                        "Please upload a clear image of a transistor.")
+            if similarity < max(warn_below, 0.65) and info is not None:
                 info["warning"] = (f"This photo looks quite different from the training images (similarity {similarity:.2f}) — "
                                    "a different package or background — so the verdict may be less reliable.")
+        else:
+            # A missing reference profile must not turn the OOD gate into fail-open.
+            raise RuntimeError("OOD reference profile is unavailable")
         return None
     except Exception as e:
         if not ood_load_failed:
             traceback.print_exc()
         else:
             print(f"[Web] OOD feature check unavailable, using OpenCV fallback ({e})")
-        # Fallback to OpenCV checks if torch OOD fails...
+        # If the feature extractor is unavailable, specific body-and-lead geometry
+        # takes precedence over generic contours (a transistor with long leads can
+        # otherwise look like a cable or fork).
+        _, geometry = auto_orient(image)
+        if has_transistor_geometry(geometry):
+            if info is not None:
+                info["warning"] = "Transistor body and leads were detected; feature similarity is unavailable. Review the result carefully."
+            return None
+
+        # Fallback to OpenCV checks if the feature extractor is unavailable.
         circles = cv2.HoughCircles(
             gray, cv2.HOUGH_GRADIENT, dp=1.2, minDist=10,
             param1=50, param2=30, minRadius=2, maxRadius=30
@@ -498,7 +619,9 @@ def ood_check(image: Image.Image, info: dict = None):
                         return "Object shape does not match a transistor (too elongated like a fork or cable). Please scan a transistor."
                     if area < (gray.shape[0] * gray.shape[1] * 0.01):
                         return "No significant object detected. Please move closer."
-        return None
+        # Do not silently accept an image the fallback could not verify. The transistor
+        # geometry check is independent of the learned defect classifier.
+        return "Could not verify a transistor in this image. Please upload a clear transistor photo and try again."
 
 
 def prepare_image(image: Image.Image, use_auto_orient: bool):
@@ -662,11 +785,13 @@ def api_predict():
     try:
         image = read_single_upload("image")
         params = parse_params()
+        raw_image = image
         image, orientation = prepare_image(image, params["auto_orient"])
 
         ood_info = {}
         if not params["bypass_ood"]:
-            problem = ood_check(image, ood_info)
+            problem = ood_check(image, ood_info, strict=params["live"],
+                                alt_image=raw_image if (params["live"] and orientation["applied"]) else None)
             if problem:
                 return jsonify({"error": problem, "success": False, "orientation": orientation,
                                 "ood_rejected": True, "ood_similarity": ood_info.get("similarity")}), 400
@@ -674,7 +799,8 @@ def api_predict():
         fields, result = run_model(image, params["architecture"], params["threshold"], params["with_gradcam"])
 
         response = {"success": True, **fields, "orientation": orientation, "diagnosis": None,
-                    "ood": {"similarity": ood_info.get("similarity"), "warning": ood_info.get("warning")}}
+                    "ood": {"similarity": ood_info.get("similarity"), "warning": ood_info.get("warning"),
+                            "limit": ood_info.get("limit")}}
         if params["with_gradcam"]:
             response["original_image"] = image_to_base64(result["original_image"])
             response["heatmap"] = image_to_base64(result["heatmap"])
@@ -878,6 +1004,9 @@ def api_health():
         "models_loaded": list(model_cache.keys()),
         "model_status": model_status_cache,
         "any_model_trained": any_model_trained(),
+        # "loaded" = the similarity check is active; "unavailable" = running on the simpler OpenCV fallback
+        "ood_extractor": "loaded" if ood_model_cache is not None else ("unavailable" if ood_load_failed else "not loaded yet"),
+        "ood_extra_references": 0 if ood_extra_refs is None else int(ood_extra_refs.shape[0]),
     })
 
 
@@ -922,6 +1051,20 @@ def init_app():
     default_arch = CONFIG["model"]["architecture"]
     print(f"\n[Web] Pre-loading default model: {default_arch}")
     get_or_load_model(default_arch)
+
+    # Warm up in the background so the FIRST scan isn't slow: loads the "is this a
+    # transistor?" feature extractor (a weights download on a fresh container) and runs
+    # one throw-away prediction so the framework has initialised its kernels.
+    def _warm_up():
+        try:
+            get_ood_model_and_ref()
+        except Exception as e:
+            print(f"[Web] Warm-up: OOD extractor unavailable ({e})")
+        try:
+            run_model(Image.new("RGB", (256, 256), (128, 128, 128)), default_arch, 0.65, with_gradcam=True)
+        except Exception as e:
+            print(f"[Web] Warm-up prediction skipped ({e})")
+    threading.Thread(target=_warm_up, name="warm-up", daemon=True).start()
 
     print("\n[Web] Server ready!")
     print(f"[Web] Access at: http://localhost:{CONFIG['web']['port']}")

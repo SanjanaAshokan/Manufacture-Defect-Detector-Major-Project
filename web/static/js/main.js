@@ -102,9 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultsError = document.getElementById('resultsError');
     const errorMessage = document.getElementById('errorMessage');
     const retryBtn = document.getElementById('retryBtn');
-    const analyzeAnywayBtn = document.getElementById('analyzeAnywayBtn');
     const oodWarning = document.getElementById('oodWarning');
-    let lastBypass = false;
     
     const analyzeAnotherBtn = document.getElementById('analyzeAnotherBtn');
     
@@ -242,9 +240,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         // Error retry button
-        if (analyzeAnywayBtn) {
-            analyzeAnywayBtn.addEventListener('click', () => runInference(true));
-        }
         retryBtn.addEventListener('click', () => {
             if (selectedFile) {
                 runInference();
@@ -320,16 +315,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Helper: Display validation/runtime error inside panel
-    function showError(msg, offerAnyway) {
+    function showError(msg) {
         errorMessage.textContent = msg;
-        if (analyzeAnywayBtn) analyzeAnywayBtn.style.display = offerAnyway ? 'inline-flex' : 'none';
         showResultState('error');
     }
 
     // Main API caller
-    function runInference(bypassOod) {
+    function runInference() {
         if (!selectedFile) return;
-        lastBypass = bypassOod === true;
 
         showResultState('loading');
         
@@ -346,7 +339,6 @@ document.addEventListener('DOMContentLoaded', () => {
         formData.append('architecture', modelSelect.value);
         formData.append('threshold', thresholdSlider.value);
         formData.append('auto_orient', (!autoOrientToggle || autoOrientToggle.checked) ? 'true' : 'false');
-        if (lastBypass) formData.append('bypass_ood', 'true');
 
         fetch('/api/predict', {
             method: 'POST',
@@ -439,7 +431,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (oodWarning) {
             const msgs = [];
-            if (lastBypass) msgs.push('You chose to analyse this image even though it did not look like a training-style transistor photo.');
             if (data.ood && data.ood.warning) msgs.push(data.ood.warning);
             oodWarning.textContent = msgs.join(' ');
             oodWarning.style.display = msgs.length ? 'block' : 'none';
@@ -536,8 +527,17 @@ document.addEventListener('DOMContentLoaded', () => {
             image: resultData.original_image.startsWith('data:image') ? resultData.original_image : 'data:image/png;base64,' + resultData.original_image,
             prediction: resultData.prediction,
             confidence: resultData.confidence,
+            probabilities: resultData.probabilities || null,
+            is_defective: resultData.is_defective,
+            is_uncertain: resultData.is_uncertain,
             threshold: resultData.threshold,
-            time: new Date().toLocaleTimeString()
+            architecture: resultData.architecture,
+            model_trained: resultData.model_trained,
+            calibrated: resultData.calibrated,
+            ood: resultData.ood || null,
+            orientation: resultData.orientation || null,
+            diagnosis: resultData.diagnosis || null,
+            time: new Date().toLocaleString()
         });
         if (recent.length > 5) recent.pop();
         try { localStorage.setItem('recentDetections', JSON.stringify(recent)); } catch (e) { /* storage full or blocked */ }
@@ -556,21 +556,136 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         recentList.innerHTML = '';
-        recent.forEach(item => {
-            const isGood = item.prediction.toLowerCase() === 'good';
+        recent.forEach((item, index) => {
+            const isGood = (item.prediction || '').toLowerCase() === 'good';
             const badgeClass = isGood ? 'good' : 'defective';
-            const threshText = item.threshold !== undefined ? `<span style="font-size: 0.85em; color: #8a9bb4; margin-left: 6px;">(Thr: ${parseFloat(item.threshold).toFixed(2)})</span>` : '';
-            recentList.innerHTML += `
-                <div class="recent-item">
-                    <img src="${item.image}" alt="thumb">
-                    <div class="recent-item-info">
-                        <strong>${item.time}</strong><br>
-                        <span class="recent-badge ${badgeClass}">${item.prediction}</span>
-                        <span>${(item.confidence * 100).toFixed(1)}%</span>${threshText}
-                    </div>
-                </div>
-            `;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'recent-item';
+            button.dataset.recentIndex = String(index);
+            button.setAttribute('aria-haspopup', 'dialog');
+            button.setAttribute('aria-label', `View details for ${item.prediction || 'recent'} detection from ${item.time || 'unknown time'}`);
+
+            const image = document.createElement('img');
+            image.src = item.image || '';
+            image.alt = 'Detection thumbnail';
+            const details = document.createElement('div');
+            details.className = 'recent-item-info';
+            const time = document.createElement('strong');
+            time.textContent = item.time || 'Recent detection';
+            const line = document.createElement('div');
+            const model = document.createElement('span');
+            model.className = 'recent-item-model';
+            const modelNames = {
+                convnext_tiny: 'ConvNeXt-Tiny',
+                efficientnet_b0: 'EfficientNet-B0',
+                resnet50: 'ResNet-50'
+            };
+            model.textContent = modelNames[item.architecture] || item.architecture || 'Model unavailable';
+            const badge = document.createElement('span');
+            badge.className = `recent-badge ${badgeClass}`;
+            badge.textContent = item.prediction || 'Unknown';
+            const confidence = document.createElement('span');
+            confidence.textContent = Number.isFinite(Number(item.confidence)) ? ` ${(Number(item.confidence) * 100).toFixed(1)}%` : '';
+            line.append(model, badge, confidence);
+            if (item.threshold !== undefined && Number.isFinite(Number(item.threshold))) {
+                const threshold = document.createElement('span');
+                threshold.className = 'recent-item-threshold';
+                threshold.textContent = `(Thr: ${Number(item.threshold).toFixed(2)})`;
+                line.appendChild(threshold);
+            }
+            details.append(time, line);
+            button.append(image, details);
+            recentList.appendChild(button);
         });
+    }
+
+    function showRecentDetectionDetails(item, index) {
+        const dialog = document.getElementById('recentDetectionModal');
+        const image = document.getElementById('recentDetailImage');
+        const title = document.getElementById('recentDetailTitle');
+        const verdict = document.getElementById('recentDetailVerdict');
+        const fields = document.getElementById('recentDetailFields');
+        const notes = document.getElementById('recentDetailNotes');
+        if (!dialog || !item) return;
+
+        const isGood = (item.prediction || '').toLowerCase() === 'good';
+        image.src = item.image || '';
+        title.textContent = `Detection ${index + 1}`;
+        verdict.textContent = item.prediction || 'Unknown';
+        verdict.className = `recent-badge ${isGood ? 'good' : 'defective'}`;
+        fields.replaceChildren();
+
+        const isNumber = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+        const percent = value => isNumber(value) ? `${(Number(value) * 100).toFixed(1)}%` : '—';
+        const rows = [
+            ['Confidence', percent(item.confidence)],
+            ['Good probability', percent(item.probabilities && item.probabilities.good)],
+            ['Defective probability', percent(item.probabilities && item.probabilities.defective)],
+            ['Decision threshold', isNumber(item.threshold) ? Number(item.threshold).toFixed(2) : '—'],
+            ['Model', item.architecture || '—'],
+            ['Checkpoint', item.model_trained === true ? 'Trained' : item.model_trained === false ? 'Untrained fallback' : '—'],
+            ['Confidence calibration', item.calibrated === true ? 'Applied' : item.calibrated === false ? 'Not applied' : '—'],
+            ['Review flag', item.is_uncertain === true ? 'Manual review suggested' : 'No low-margin flag'],
+            ['Time', item.time || '—']
+        ];
+        rows.forEach(([label, value]) => {
+            const row = document.createElement('div');
+            row.className = 'recent-detail-field';
+            const labelEl = document.createElement('span');
+            labelEl.textContent = label;
+            const valueEl = document.createElement('strong');
+            valueEl.textContent = value;
+            row.append(labelEl, valueEl);
+            fields.appendChild(row);
+        });
+
+        notes.replaceChildren();
+        const noteItems = [];
+        if (item.ood && item.ood.warning) noteItems.push({ text: item.ood.warning, warning: true });
+        if (item.orientation && item.orientation.reason) noteItems.push({ text: `Orientation: ${item.orientation.reason}` });
+        if (item.diagnosis && (item.diagnosis.label || item.diagnosis.note)) {
+            noteItems.push({ text: `Suspected defect: ${[item.diagnosis.label, item.diagnosis.note].filter(Boolean).join(' — ')}`, warning: true });
+        }
+        noteItems.forEach(note => {
+            const el = document.createElement('div');
+            el.className = `recent-detail-note${note.warning ? ' warning' : ''}`;
+            el.textContent = note.text;
+            notes.appendChild(el);
+        });
+        notes.hidden = noteItems.length === 0;
+
+        if (typeof dialog.showModal === 'function') dialog.showModal();
+        else dialog.setAttribute('open', '');
+    }
+
+    function setupRecentDetectionDetails() {
+        const recentList = document.getElementById('recentList');
+        const dialog = document.getElementById('recentDetectionModal');
+        if (recentList) {
+            recentList.addEventListener('click', event => {
+                const button = event.target.closest('[data-recent-index]');
+                if (!button) return;
+                let recent = [];
+                try { recent = JSON.parse(localStorage.getItem('recentDetections') || '[]'); } catch (e) { recent = []; }
+                const index = Number(button.dataset.recentIndex);
+                if (Number.isInteger(index) && index >= 0 && index < recent.length) {
+                    showRecentDetectionDetails(recent[index], index);
+                }
+            });
+        }
+        if (!dialog) return;
+        const closeButton = dialog.querySelector('[data-close-recent-detail]');
+        if (closeButton) closeButton.addEventListener('click', () => dialog.close ? dialog.close() : dialog.removeAttribute('open'));
+        dialog.addEventListener('click', event => {
+            if (event.target === dialog) dialog.close ? dialog.close() : dialog.removeAttribute('open');
+        });
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupRecentDetectionDetails, { once: true });
+    } else {
+        setupRecentDetectionDetails();
     }
     
     // Call render on load

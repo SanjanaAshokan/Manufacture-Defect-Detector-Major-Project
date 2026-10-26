@@ -69,6 +69,22 @@
         {% block content %}{% endblock %}
     </main>
 
+    <dialog class="recent-detail-modal" id="recentDetectionModal" aria-labelledby="recentDetailTitle">
+        <div class="recent-detail-card">
+            <button class="recent-detail-close" type="button" data-close-recent-detail aria-label="Close detection details">&times;</button>
+            <div class="recent-detail-heading">
+                <img id="recentDetailImage" src="" alt="Inspected transistor">
+                <div>
+                    <p class="section-tag">Detection details</p>
+                    <h2 id="recentDetailTitle">Recent detection</h2>
+                    <span id="recentDetailVerdict" class="recent-badge"></span>
+                </div>
+            </div>
+            <div id="recentDetailFields" class="recent-detail-fields"></div>
+            <div id="recentDetailNotes" class="recent-detail-notes" hidden></div>
+        </div>
+    </dialog>
+
     <!-- Footer -->
     <footer class="footer">
         <div class="container">

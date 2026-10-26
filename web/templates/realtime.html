@@ -75,6 +75,9 @@
 
                 <!-- Results Content -->
                 <div class="results-content" id="resultsContent" style="display:none;">
+                    <div class="model-warning" id="rtOodWarn" style="display:none;"></div>
+                    <p class="tool-note" id="rtOodInfo" style="display:none;"></p>
+
                     <!-- Prediction Badge -->
                     <div class="prediction-badge" id="predictionBadge">
                         <span class="prediction-icon" id="predictionIcon">✓</span>
@@ -157,6 +160,7 @@
 .recent-badge.defective { background: rgba(239, 68, 68, 0.2); color: var(--color-danger); }
 </style>
 
+<script src="{{ url_for('static', filename='js/scan_gate.js') }}"></script>
 <script>
 document.addEventListener("DOMContentLoaded", () => {
     const video = document.getElementById('webcam');
@@ -186,21 +190,24 @@ document.addEventListener("DOMContentLoaded", () => {
     const rtGradcamImage = document.getElementById('rtGradcamImage');
     const scanAnotherBtn = document.getElementById('scanAnotherBtn');
     const scanningStatus = document.getElementById('scanningStatus');
+    const rtOodWarn = document.getElementById('rtOodWarn');
+    const rtOodInfo = document.getElementById('rtOodInfo');
 
     let stream = null;
-    let isProcessing = false;
+    let busy = false;              // a request to the server is in flight
     let keepProcessing = false;
     let activeImages = {
         original: '',
         heatmap: '',
         overlay: ''
     };
-    
-    // Motion tracking variables
+
+    // Motion tracking: sampled locally every SAMPLE_MS; the server is only contacted
+    // once the scene has been steady for a moment (see static/js/scan_gate.js).
+    const SAMPLE_MS = 120;
     let prevImageData = null;
-    let stillFrames = 0;
-    const TARGET_STILL_FRAMES = 3; // ~1.5 seconds of stillness at ~2 scans/second
-    const MOTION_THRESHOLD = 8; // Average per-channel pixel difference (0-255 scale); camera noise is ~2-4
+    let scanStart = 0;
+    const gate = createScanGate({ baseThreshold: 8, stillNeeded: 4 });
 
     // Hidden motion canvas
     const motionCanvas = document.createElement('canvas');
@@ -254,11 +261,14 @@ document.addEventListener("DOMContentLoaded", () => {
             // We do not show resultsContent immediately; wait until captured.
             resultsError.style.display = 'none';
             
-            stillFrames = 0;
+            gate.reset();
             prevImageData = null;
+            busy = false;
             keepProcessing = true;
             video.onloadedmetadata = () => {
-                processLoop();
+                scanStart = Date.now();
+                setStatus('Hold the transistor steady in front of the camera…');
+                sampleLoop();
             };
         } catch (err) {
             console.error("Error accessing camera:", err);
@@ -282,137 +292,107 @@ document.addEventListener("DOMContentLoaded", () => {
     startCameraBtn.addEventListener('click', startCamera);
     stopCameraBtn.addEventListener('click', stopCamera);
 
-    async function processLoop() {
+    function setStatus(text, warn) {
+        scanningStatus.style.display = 'block';
+        const safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        scanningStatus.innerHTML = warn
+            ? '<span style="color: #ffaa00;">⚠️ ' + safe + '</span>'
+            : '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,0.3); border-radius:50%; border-top-color:#fff; animation:spin 1s ease-in-out infinite; margin-right:8px;"></span><span>' + safe + '</span>';
+    }
+
+    // Cheap local check, ~8 times a second: how much did the picture change?
+    function sampleLoop() {
         if (!keepProcessing) return;
-        
-        if (isProcessing) {
-            // Skip frame if still processing previous
-            requestAnimationFrame(processLoop);
-            return;
-        }
-
-        isProcessing = true;
-        
-        // Calculate FPS
-        frameCount++;
-        const now = Date.now();
-        if (now - lastFpsTime >= 1000) {
-            fpsCounter.textContent = `FPS: ${frameCount}`;
-            frameCount = 0;
-            lastFpsTime = now;
-        }
-
         try {
-            // Draw for motion detection
-            motionCtx.drawImage(video, 0, 0, motionCanvas.width, motionCanvas.height);
-            const currentImageData = motionCtx.getImageData(0, 0, motionCanvas.width, motionCanvas.height).data;
-            
-            let isStill = false;
-            
-            if (prevImageData) {
-                let diffSum = 0;
-                for (let i = 0; i < currentImageData.length; i += 4) {
-                    diffSum += Math.abs(currentImageData[i] - prevImageData[i]);
-                    diffSum += Math.abs(currentImageData[i+1] - prevImageData[i+1]);
-                    diffSum += Math.abs(currentImageData[i+2] - prevImageData[i+2]);
+            if (video.readyState >= 2 && video.videoWidth) {
+                frameCount++;
+                const now = Date.now();
+                if (now - lastFpsTime >= 1000) {
+                    fpsCounter.textContent = `Checks/s: ${frameCount}`;
+                    frameCount = 0;
+                    lastFpsTime = now;
                 }
-                const avgDiff = diffSum / (motionCanvas.width * motionCanvas.height * 3);
-                
-                if (avgDiff < MOTION_THRESHOLD) {
-                    stillFrames++;
-                } else {
-                    stillFrames = 0;
-                }
-                
-                if (stillFrames >= TARGET_STILL_FRAMES) {
-                    isStill = true;
-                }
-            }
-            
-            // Store current frame for next time
-            prevImageData = new Uint8ClampedArray(currentImageData);
 
-            // Downscale the frame before upload (the model works at 224px anyway) so
-            // each request is a few tens of KB instead of a full-resolution frame.
+                motionCtx.drawImage(video, 0, 0, motionCanvas.width, motionCanvas.height);
+                const current = motionCtx.getImageData(0, 0, motionCanvas.width, motionCanvas.height).data;
+                if (prevImageData) {
+                    let diffSum = 0;
+                    for (let i = 0; i < current.length; i += 4) {
+                        diffSum += Math.abs(current[i] - prevImageData[i]) +
+                                   Math.abs(current[i + 1] - prevImageData[i + 1]) +
+                                   Math.abs(current[i + 2] - prevImageData[i + 2]);
+                    }
+                    const avgDiff = diffSum / (motionCanvas.width * motionCanvas.height * 3);
+                    if (gate.sample(avgDiff, Date.now() - scanStart) && !busy) {
+                        analyseFrame();
+                    }
+                }
+                prevImageData = new Uint8ClampedArray(current);
+            }
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setTimeout(sampleLoop, SAMPLE_MS);
+        }
+    }
+
+    async function analyseFrame() {
+        busy = true;
+        setStatus('Analysing…');
+        try {
+            // Downscale before upload (the model works at 224px anyway)
             const frameScale = Math.min(1, 640 / video.videoWidth);
             canvas.width = Math.round(video.videoWidth * frameScale);
             canvas.height = Math.round(video.videoHeight * frameScale);
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+            if (!blob) { gate.reset(); return; }
 
-            // Get blob from canvas
-            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
-            
-            if (!blob) {
-                isProcessing = false;
-                requestAnimationFrame(processLoop);
-                return;
-            }
-
-            // Prepare form data
             const formData = new FormData();
             formData.append('image', blob, 'frame.jpg');
             formData.append('architecture', modelSelect.value);
             formData.append('threshold', thresholdSlider.value);
             formData.append('bypass_ood', 'false');
-            // Only build the Grad-CAM heat-map for the final, held-still frame;
-            // scanning frames just need a quick verdict.
-            formData.append('gradcam', isStill ? 'true' : 'false');
+            formData.append('live', 'true');       // stricter "is this a transistor?" rule
+            formData.append('gradcam', 'true');
 
-            // Send to API
-            const response = await fetch('/api/predict', {
-                method: 'POST',
-                body: formData
-            });
+            const response = await fetch('/api/predict', { method: 'POST', body: formData });
+            const data = await response.json().catch(() => ({ error: 'Unexpected server response.' }));
+            if (!keepProcessing) return;           // user pressed Stop meanwhile
 
-            const data = await response.json();
-            
             if (response.ok && data.success) {
-                if (!isStill) {
-                    scanningStatus.style.display = 'block';
-                    scanningStatus.innerHTML = '<span class="spinner" style="display:inline-block; width:12px; height:12px; border:2px solid rgba(255,255,255,0.3); border-radius:50%; border-top-color:#fff; animation:spin 1s ease-in-out infinite; margin-right:8px;"></span><span>Hold transistor still to scan...</span>';
-                    resultsError.style.display = 'none';
-                    // We don't stop the camera. Loop will continue via finally.
-                } else {
-                    scanningStatus.style.display = 'none';
-                    updateUI(data);
-                    resultsError.style.display = 'none';
-                    
-                    // Add to recent detections if the global function exists
-                    if (typeof updateRecentDetections === 'function') {
-                        updateRecentDetections(data);
-                    }
-                    
-                    // Stop camera since we successfully captured!
-                    stopCamera();
-                    // However, keep the results and scan another button visible
-                    resultsEmpty.style.display = 'none';
-                    resultsContent.style.display = 'block';
-                    cameraSetup.style.display = 'none'; // hide start button when viewing results
-                    
-                    // Return here so loop doesn't continue
-                    isProcessing = false;
-                    return;
+                scanningStatus.style.display = 'none';
+                updateUI(data);
+                // Show how well the frame matched the training photos (helps you tune the limit)
+                // and any "no clear transistor shape" advisory.
+                const ood = data.ood || {};
+                rtOodInfo.style.display = ood.similarity != null ? 'block' : 'none';
+                if (ood.similarity != null) {
+                    rtOodInfo.textContent = 'Match to training photos: ' + Number(ood.similarity).toFixed(2) +
+                        (ood.limit != null ? ' (needs ' + Number(ood.limit).toFixed(2) + ')' : '');
                 }
+                rtOodWarn.textContent = ood.warning || '';
+                rtOodWarn.style.display = ood.warning ? 'block' : 'none';
+                resultsError.style.display = 'none';
+                if (typeof updateRecentDetections === 'function') {
+                    updateRecentDetections(data);
+                }
+                // Captured: stop the camera but keep the result and "Scan Another" visible
+                stopCamera();
+                resultsEmpty.style.display = 'none';
+                resultsContent.style.display = 'block';
+                cameraSetup.style.display = 'none';
             } else {
-                throw new Error(data.error || "Server error");
+                // "Not a transistor" etc.: say so, then wait for the scene to change
+                setStatus(data.error || 'Server error', true);
+                gate.block();
             }
         } catch (err) {
             console.error(err);
-            if (err.message && (err.message.includes("out-of-domain") || err.message.includes("transistor"))) {
-                scanningStatus.style.display = 'block';
-                scanningStatus.innerHTML = '<span style="color: #ffaa00;">⚠️ ' + err.message + '</span>';
-                // Reset still frames so they have to reposition and hold still again
-                stillFrames = 0;
-            }
-            // Don't show generic error immediately to avoid flickering on dropped frames, 
-            // but log it.
+            setStatus('Connection problem — retrying…', true);
+            setTimeout(() => gate.reset(), 2000);
         } finally {
-            isProcessing = false;
-            // Short delay to avoid hammering the server too hard
-            setTimeout(() => {
-                requestAnimationFrame(processLoop);
-            }, 400); // ~2 scans per second keeps the server responsive
+            busy = false;
         }
     }
 

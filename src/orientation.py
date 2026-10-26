@@ -147,11 +147,16 @@ def _detect_dark_body(small: np.ndarray) -> Dict:
     ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
     (best_side, best), (_, runner_up) = ranked[0], ranked[1]
     if best < _MIN_LEAD_FRACTION * area:
-        return {"direction": None, "confidence": 0.0, "reason": "no leads visible", "counts": counts}
+        return {"direction": None, "confidence": 0.0, "reason": "no leads visible",
+                "counts": counts, "body_box": body_box, "lead_evidence": False}
 
     dominance = best / float(max(runner_up, 1))
     if dominance < _MIN_DOMINANCE:
-        return {"direction": None, "confidence": 0.0, "reason": "leads direction ambiguous", "counts": counts}
+        # Keep positive body + metal-lead evidence even when diagonal leads do not
+        # fit one of the four cardinal direction bands. OOD validation uses this as
+        # object-domain evidence; orientation still correctly remains unchanged.
+        return {"direction": None, "confidence": 0.0, "reason": "leads direction ambiguous",
+                "counts": counts, "body_box": body_box, "lead_evidence": True}
 
     # Confidence blends how dominant the winning side is with how much lead there is.
     confidence = 0.6 * min(dominance / 6.0, 1.0) + 0.4 * min(best / (0.10 * area), 1.0)
@@ -160,7 +165,7 @@ def _detect_dark_body(small: np.ndarray) -> Dict:
                 round(min(width, x1) / width, 4), round(min(height, y1) / height, 4)]
     return {"direction": best_side, "confidence": round(float(confidence), 3),
             "reason": f"leads point {best_side}", "counts": counts,
-            "body_box": body_box, "lead_box": lead_box}
+            "body_box": body_box, "lead_box": lead_box, "lead_evidence": True}
 
 
 def _detect_generic(small: np.ndarray) -> Dict:
@@ -219,7 +224,7 @@ def _detect_generic(small: np.ndarray) -> Dict:
     by, bx = np.nonzero(body)
     ratio = len(lx) / float(max(len(bx), 1))
     if ratio < _GENERIC_MIN_LEAD_RATIO:
-        return _none("no leads visible", body_box=body_box)
+        return _none("no leads visible", body_box=body_box, lead_evidence=False)
 
     centre = np.array([bx.mean(), by.mean()])
     vec = np.stack([lx - centre[0], ly - centre[1]], axis=1)
@@ -228,7 +233,7 @@ def _detect_generic(small: np.ndarray) -> Dict:
     mean_dir = unit.mean(axis=0)
     resultant = float(np.linalg.norm(mean_dir))
     if resultant < _GENERIC_MIN_RESULTANT:
-        return _none("leads direction ambiguous", body_box=body_box)
+        return _none("leads direction ambiguous", body_box=body_box, lead_evidence=True)
 
     alpha = float(np.degrees(np.arctan2(mean_dir[0], mean_dir[1])))   # 0 = down, -90 = left
     lx0, ly0, lw, lh = cv2.boundingRect(leads)
@@ -241,7 +246,7 @@ def _detect_generic(small: np.ndarray) -> Dict:
     word = _compass(alpha)
     return {"direction": word, "angle_deg": round(alpha, 1), "confidence": round(float(confidence), 3),
             "reason": f"leads point {word}", "body_box": body_box, "lead_box": lead_box,
-            "bg_rgb": bg_rgb, "method": "contrast"}
+            "bg_rgb": bg_rgb, "method": "contrast", "lead_evidence": True}
 
 
 def detect_lead_direction(image: Image.Image) -> Dict:
@@ -301,6 +306,7 @@ def auto_orient(image: Image.Image, min_confidence: float = _MIN_CONFIDENCE) -> 
         "reason": found["reason"],
         "body_box": found.get("body_box"),   # normalised [x0, y0, x1, y1] in the ORIGINAL image
         "lead_box": found.get("lead_box"),
+        "lead_evidence": bool(found.get("lead_evidence", found.get("lead_box") is not None)),
     }
     if direction is None or found["confidence"] < min_confidence:
         if direction not in (None, "down"):
