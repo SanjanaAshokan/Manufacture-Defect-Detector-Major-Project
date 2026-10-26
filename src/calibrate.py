@@ -126,6 +126,9 @@ def main():
         print("  -> Calibration improved. Confidence values will better match real accuracy.")
     else:
         print("  -> Calibration made things worse or had no effect. Using temperature = 1.0.")
+        # Do what the message promises: never save a temperature that worsens ECE.
+        temperature = 1.0
+        ece_after = ece_before
 
     # Save alongside the checkpoint so the web app / evaluate.py can pick it up.
     calib_path = Path(config["evaluation"]["plots_dir"]) / f"calibration_{architecture}.json"
