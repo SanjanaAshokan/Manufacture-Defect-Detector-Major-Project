@@ -168,6 +168,56 @@ def _detect_dark_body(small: np.ndarray) -> Dict:
             "body_box": body_box, "lead_box": lead_box, "lead_evidence": True}
 
 
+_VOTE_FAINT_MIN = 10.0        # LAB distance: pale / silver leads on white are far fainter than the body
+_VOTE_FAR_FRACTION = 0.4      # a lead pixel must protrude >= 40% of the body half-thickness from the body
+_VOTE_MIN_PIXELS = 8
+_VOTE_MIN_CONE = 0.75         # share of protruding mass within +/-60 deg of the winning direction
+_VOTE_MAX_OPPOSITE = 0.25     # ... and at most this share within +/-60 deg of the opposite direction
+
+
+def _protruding_lead_vote(dist: np.ndarray, spread: float, body: np.ndarray,
+                          thickest: float, centre: np.ndarray) -> Dict:
+    """
+    Direction vote that survives metal tabs, bent leads, shadows and pale leads.
+
+    Only pixels that genuinely PROTRUDE from the body take part (shadows, corner residue
+    and tab outlines hug the body and are ignored), found with a much lower contrast
+    threshold than the body so that pale / silver leads on a white backdrop are seen.
+    Each pixel is weighted by its distance from the body, so long leads outweigh stubs.
+    The verdict is trusted only when the protruding mass is clearly one-sided (a cone of
+    +/-60 deg around the winning direction holds most of it, the opposite cone almost
+    none); otherwise the caller keeps the image exactly as uploaded.
+    """
+    faint = cv2.morphologyEx((dist > max(3.0 * spread + 6.0, _VOTE_FAINT_MIN)).astype(np.uint8),
+                             cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    _, comp, _, _ = cv2.connectedComponentsWithStats(faint)
+    ids = np.unique(comp[body > 0])
+    attached = np.isin(comp, ids[ids > 0]).astype(np.uint8)
+    away = cv2.distanceTransform((1 - body).astype(np.uint8), cv2.DIST_L2, 5)
+    far = attached & (away >= max(4.0, _VOTE_FAR_FRACTION * thickest)).astype(np.uint8)
+    fy, fx = np.nonzero(far)
+    if len(fx) < _VOTE_MIN_PIXELS:
+        return {"ok": False, "mask": far}
+    vec = np.stack([fx - centre[0], fy - centre[1]], axis=1)
+    unit = vec / (np.linalg.norm(vec, axis=1)[:, None] + 1e-9)
+    weight = away[fy, fx]
+    mean = (unit * weight[:, None]).sum(0) / weight.sum()
+    norm = float(np.linalg.norm(mean))
+    if norm < 1e-6:
+        return {"ok": False, "mask": far}
+    cos = unit @ (mean / norm)
+    limit = np.cos(np.radians(60.0))
+    cone = float(weight[cos >= limit].sum() / weight.sum())
+    opposite = float(weight[cos <= -limit].sum() / weight.sum())
+    ok = cone >= _VOTE_MIN_CONE and opposite <= _VOTE_MAX_OPPOSITE
+    # pixels on the winning side only: a tab / outline on the opposite side stays out of the
+    # lead box that is drawn for the user
+    side = np.zeros_like(far)
+    side[fy[cos >= limit], fx[cos >= limit]] = 1
+    return {"ok": ok, "mask": far, "side": side, "mean": mean, "resultant": norm,
+            "cone": cone, "opposite": opposite}
+
+
 def _detect_generic(small: np.ndarray) -> Dict:
     """
     Detector 2: background-agnostic. Everything that differs from the photo's border
@@ -223,23 +273,45 @@ def _detect_generic(small: np.ndarray) -> Dict:
     ly, lx = np.nonzero(leads)
     by, bx = np.nonzero(body)
     ratio = len(lx) / float(max(len(bx), 1))
-    if ratio < _GENERIC_MIN_LEAD_RATIO:
-        return _none("no leads visible", body_box=body_box, lead_evidence=False)
-
     centre = np.array([bx.mean(), by.mean()])
-    vec = np.stack([lx - centre[0], ly - centre[1]], axis=1)
-    norms = np.linalg.norm(vec, axis=1)
-    unit = vec[norms > 1e-6] / norms[norms > 1e-6, None]
-    mean_dir = unit.mean(axis=0)
-    resultant = float(np.linalg.norm(mean_dir))
-    if resultant < _GENERIC_MIN_RESULTANT:
-        return _none("leads direction ambiguous", body_box=body_box, lead_evidence=True)
+    plain_ok = ratio >= _GENERIC_MIN_LEAD_RATIO
+    lead_mask = leads
+    vote = None
+    if plain_ok:
+        vec = np.stack([lx - centre[0], ly - centre[1]], axis=1)
+        norms = np.linalg.norm(vec, axis=1)
+        unit = vec[norms > 1e-6] / norms[norms > 1e-6, None]
+        mean_dir = unit.mean(axis=0)
+        resultant = float(np.linalg.norm(mean_dir))
+    if (not plain_ok) or resultant < _GENERIC_MIN_RESULTANT:
+        # The plain vote found no leads or is split (tab opposite the leads, bent / fanned-out
+        # leads, pale leads ...). Retry with the protruding-pixel vote. Inputs that passed
+        # the plain vote never reach this branch, so their behaviour is unchanged.
+        vote = _protruding_lead_vote(dist, spread, body, thickest, centre)
+        if vote["ok"]:
+            mean_dir, resultant = vote["mean"], vote["resultant"]
+            lead_mask = vote["side"]
+            ratio = max(ratio, np.count_nonzero(vote["mask"]) / float(max(len(bx), 1)))
+        elif not plain_ok:
+            return _none("no leads visible", body_box=body_box, lead_evidence=False)
+        else:
+            ambiguous = _none("leads direction ambiguous", body_box=body_box, lead_evidence=True)
+            far = vote["mask"] if np.count_nonzero(vote["mask"]) >= _VOTE_MIN_PIXELS else leads
+            lbx, lby, lbw, lbh = cv2.boundingRect(far)
+            if lbw > 0 and lbh > 0:
+                ambiguous["lead_box"] = [round(lbx / width, 4), round(lby / height, 4),
+                                         round((lbx + lbw) / width, 4), round((lby + lbh) / height, 4)]
+            return ambiguous
 
     alpha = float(np.degrees(np.arctan2(mean_dir[0], mean_dir[1])))   # 0 = down, -90 = left
-    lx0, ly0, lw, lh = cv2.boundingRect(leads)
+    lx0, ly0, lw, lh = cv2.boundingRect(lead_mask)
     lead_box = [round(lx0 / width, 4), round(ly0 / height, 4),
                 round((lx0 + lw) / width, 4), round((ly0 + lh) / height, 4)]
-    confidence = 0.7 * min(1.0, (resultant - 0.5) / 0.4) + 0.3 * min(1.0, ratio / 0.3)
+    if vote is not None and vote["ok"]:
+        # one-sidedness of the protruding mass: cone share 0.5 -> 0, 0.9+ -> 1
+        confidence = 0.7 * min(1.0, (vote["cone"] - 0.5) / 0.4) + 0.3 * min(1.0, ratio / 0.3)
+    else:
+        confidence = 0.7 * min(1.0, (resultant - 0.5) / 0.4) + 0.3 * min(1.0, ratio / 0.3)
     edge = np.concatenate([small[:b].reshape(-1, 3), small[-b:].reshape(-1, 3),
                            small[:, :b].reshape(-1, 3), small[:, -b:].reshape(-1, 3)])
     bg_rgb = tuple(int(v) for v in np.median(edge, axis=0))
@@ -275,6 +347,15 @@ def detect_lead_direction(image: Image.Image) -> Dict:
     # undetermined by both: keep the first detector's body box if it has one
     if first.get("body_box") is None and second.get("body_box") is not None:
         first["body_box"] = second["body_box"]
+    # Lead evidence found by the contrast detector must survive even when the dark-body
+    # detector contributed the body box itself (e.g. TO-220 / TO-3P parts on a plain white
+    # backdrop: the dark-body detector finds the body but its lead test is blind there,
+    # while the contrast detector sees body + leads yet cannot name one direction).
+    # Direction stays None, so no rotation is ever applied because of this.
+    if second.get("lead_evidence") and first.get("body_box") is not None:
+        first["lead_evidence"] = True
+        if first.get("lead_box") is None and second.get("lead_box") is not None:
+            first["lead_box"] = second["lead_box"]
     return first
 
 def auto_orient(image: Image.Image, min_confidence: float = _MIN_CONFIDENCE) -> Tuple[Image.Image, Dict]:

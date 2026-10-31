@@ -519,7 +519,12 @@ def ood_check(image: Image.Image, info: dict = None, strict: bool = False, alt_i
     # 1. Basic image quality check
     std_dev = np.std(gray)
     mean_val = np.mean(gray)
-    if std_dev > 80 or std_dev < 5 or mean_val < 10 or mean_val > 240:
+    # A very bright mean on its own is NOT out-of-domain: catalogue / product photos of a
+    # transistor on a plain white backdrop are mostly white (mean > 240) yet carry plenty of
+    # contrast from the part itself. Only treat an extreme mean as a failure when the image
+    # is also low-contrast (blank sheet, over-exposed or black frame).
+    too_flat_bright = mean_val > 240 and std_dev < 20
+    if std_dev > 80 or std_dev < 5 or mean_val < 10 or too_flat_bright:
         return "Image appears to be out-of-domain (too uniform, dark, or bright). Please upload an image of a transistor."
 
     # 2. Advanced Anomaly Detection (Cosine Similarity)
