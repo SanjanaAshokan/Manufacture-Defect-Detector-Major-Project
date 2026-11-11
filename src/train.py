@@ -345,6 +345,31 @@ def train(config: dict):
     print(f"  Last checkpoint:  {checkpoint_dir / f'last_{architecture}.pth'}")
     print("=" * 60)
 
+    # ---- Record the run for the website's Dashboard (outputs/plots/training_<arch>.json) ----
+    try:
+        from src.model_info import training_recipe, write_json
+        epochs_run = len(history["val_loss"])
+        write_json(
+            Path(config["evaluation"]["plots_dir"]) / f"training_{architecture}.json",
+            {
+                "architecture": architecture,
+                "max_epochs": epochs,
+                "epochs_run": epochs_run,
+                "best_epoch": best_epoch,
+                "early_stopped": bool(early_stopping is not None and early_stopping.early_stop),
+                "best_val_loss": round(float(best_val_loss), 5),
+                "best_val_acc": round(float(history["val_acc"][best_epoch - 1]), 5) if best_epoch else None,
+                "total_seconds": round(total_time, 1),
+                "device": str(device),
+                "recipe": training_recipe(config),
+                "history": {k: [round(float(x), 5) for x in v] for k, v in history.items()},
+                "trained_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            },
+        )
+        print(f"[Dashboard] Run recorded in {config['evaluation']['plots_dir']}/training_{architecture}.json")
+    except Exception as exc:  # recording is a convenience and must never fail a finished training run
+        print(f"[Dashboard] Could not record the training run: {exc}")
+
     return history
 
 

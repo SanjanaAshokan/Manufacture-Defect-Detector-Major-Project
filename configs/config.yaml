@@ -92,6 +92,11 @@ web:
   host: "0.0.0.0"
   port: 7860
   debug: false
+  # "Is this a transistor?" gate. When the body-and-leads evidence is only found after a
+  # relaxation (stock-photo bars trimmed, gradient backdrop, live centre crop) the image must
+  # still reach this feature similarity. Lower = more permissive. Env: OOD_ASSISTED_MIN_SIMILARITY
+  # Set OOD_DEBUG=1 to log every gate decision (similarity + how geometry was found) while tuning.
+  ood_assisted_min_similarity: 0.20
   max_content_length: 16  # MB
   allowed_extensions:
     - ".png"

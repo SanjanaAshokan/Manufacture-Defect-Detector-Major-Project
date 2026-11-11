@@ -1,226 +1,158 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Transistor Defect Detector{% endblock %}
+{% from "_dash_macros.html" import subnav %}
+{% block title %}Model Comparison — Transistor Defect Detector{% endblock %}
 
 {% block content %}
 <section class="dashboard-section">
     <div class="container">
         <div class="section-header animate-fade-up">
             <span class="section-tag">Performance</span>
-            <h1 class="section-title">Model Dashboard</h1>
-            <p class="section-subtitle">Comprehensive evaluation metrics, visualizations, and threshold analysis for production deployment.</p>
+            <h1 class="section-title">Model Comparison</h1>
+            <p class="section-subtitle">ConvNeXt-Tiny, EfficientNet-B0 and ResNet-50 trained on the same transistor dataset — compared on accuracy, size, training effort and speed. Pick a model for its full details.</p>
         </div>
 
-        {% if results %}
-        {% if results.evaluated_at %}
-        <p class="eval-timestamp animate-fade-up">
-            Last evaluated {{ results.evaluated_at.split('T')[0] }} · {{ results.num_test_samples }} test images
-            {% if model_status and not model_status.trained %} · ⚠ no checkpoint currently loaded for live predictions{% endif %}
-        </p>
+        {{ subnav(views, 'overview') }}
+
+        {% if comparison.unevaluated %}
+        <div class="dash-notice glass-card animate-fade-up">
+            <strong>Test-set results are missing for {{ comparison.unevaluated|join(', ') }}.</strong>
+            Those cells show “—”. Run <code>scripts/evaluate_all</code> (<code>.bat</code> on Windows, <code>.sh</code> on Linux/macOS) to fill them in; validation figures below come straight from the saved checkpoints.
+        </div>
         {% endif %}
-        <!-- Metrics Cards -->
-        <div class="metrics-grid animate-fade-up">
-            <div class="metric-card glass-card">
-                <div class="metric-circle metric-circle-blue">
-                    <svg viewBox="0 0 36 36" class="circular-chart">
-                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.accuracy * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                    </svg>
-                    <span class="metric-value">{{ (results.metrics.accuracy * 100)|round(1) }}%</span>
+
+        {% for v in views if v.history_mismatch %}
+        <div class="dash-notice glass-card animate-fade-up">
+            <strong>{{ v.label }}: epochs run is not shown.</strong>
+            The training log found next to its saved checkpoint (<code>last_{{ v.arch }}.pth</code>) is from a different run than the checkpoint itself (best epoch {{ v.vals.best_epoch }}), so it was ignored rather than shown wrongly. Run <code>python scripts/import_training_log.py {{ v.arch }}</code> to fill it from the real training log.
+        </div>
+        {% endfor %}
+
+        <!-- Model cards -->
+        <div class="model-cards animate-fade-up delay-100">
+            {% for v in views %}
+            <a href="/dashboard/{{ v.slug }}" class="model-card glass-card" style="--m-colour: {{ v.colour }}">
+                <div class="model-card-top">
+                    <span class="dash-dot"></span>
+                    <h3>{{ v.label }}</h3>
+                    {% if v.is_default %}<span class="pill ok">default</span>{% endif %}
                 </div>
-                <h3>Accuracy</h3>
-                <p>Overall correct predictions</p>
-            </div>
-            <div class="metric-card glass-card">
-                <div class="metric-circle metric-circle-purple">
-                    <svg viewBox="0 0 36 36" class="circular-chart">
-                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.precision * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                    </svg>
-                    <span class="metric-value">{{ (results.metrics.precision * 100)|round(1) }}%</span>
+                <p class="model-card-tag">{{ v.details.tagline }}</p>
+                <div class="model-card-stats">
+                    <div><span>{% if v.vals.val_acc is not none %}{{ (v.vals.val_acc * 100)|round(1) }}%{% else %}—{% endif %}</span><small>Val. accuracy</small></div>
+                    <div><span>{% if v.vals.parameters_m %}{{ v.vals.parameters_m|round(1) }}M{% else %}—{% endif %}</span><small>Parameters</small></div>
+                    <div><span>{{ v.vals.best_epoch or '—' }}<em>/{{ v.vals.max_epochs }}</em></span><small>Best epoch</small></div>
                 </div>
-                <h3>Precision</h3>
-                <p>True positives / all positives</p>
-            </div>
-            <div class="metric-card glass-card">
-                <div class="metric-circle metric-circle-cyan">
-                    <svg viewBox="0 0 36 36" class="circular-chart">
-                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.recall * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                    </svg>
-                    <span class="metric-value">{{ (results.metrics.recall * 100)|round(1) }}%</span>
+                <div class="model-card-badges">
+                    {% for b in v.badges %}<span class="pill ok">{{ b }}</span>{% endfor %}
+                    {% for b in v.neutral_badges %}<span class="pill ok">{{ b }}</span>{% endfor %}
                 </div>
-                <h3>Recall</h3>
-                <p>Defects correctly identified</p>
-            </div>
-            <div class="metric-card glass-card">
-                <div class="metric-circle metric-circle-green">
-                    <svg viewBox="0 0 36 36" class="circular-chart">
-                        <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                        <path class="circle-fill" stroke-dasharray="{{ (results.metrics.f1_score * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
-                    </svg>
-                    <span class="metric-value">{{ (results.metrics.f1_score * 100)|round(1) }}%</span>
-                </div>
-                <h3>F1-Score</h3>
-                <p>Harmonic mean of P &amp; R</p>
-            </div>
+                <span class="model-card-link">View details →</span>
+            </a>
+            {% endfor %}
         </div>
 
-        <!-- Charts Grid -->
-        <div class="charts-grid animate-fade-up">
-            {% if plots.get('confusion_matrix') %}
-            <div class="chart-card glass-card">
-                <h3>Confusion Matrix</h3>
-                <img src="/plots/confusion_matrix.png" alt="Confusion Matrix" class="chart-image" loading="lazy">
+        <!-- Grouped bar chart -->
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>Performance at a glance</h3>
+            <p class="threshold-desc">Higher is better. Hover a bar for the exact value. Missing bars mean that model has not been evaluated on the test set yet.</p>
+            <div class="bar-legend">
+                {% for v in views %}<span class="legend-item" style="--m-colour: {{ v.colour }}"><span class="dash-dot"></span>{{ v.label }}</span>{% endfor %}
             </div>
-            {% endif %}
-            {% if plots.get('pr_curve') %}
-            <div class="chart-card glass-card">
-                <h3>Precision-Recall Curve</h3>
-                <img src="/plots/pr_curve.png" alt="Precision-Recall Curve" class="chart-image" loading="lazy">
-            </div>
-            {% endif %}
-            {% if plots.get('roc_curve') %}
-            <div class="chart-card glass-card">
-                <h3>ROC Curve</h3>
-                <img src="/plots/roc_curve.png" alt="ROC Curve" class="chart-image" loading="lazy">
-            </div>
-            {% endif %}
-            {% if plots.get('training_history') %}
-            <div class="chart-card glass-card">
-                <h3>Training History</h3>
-                <img src="/plots/training_history.png" alt="Training History" class="chart-image" loading="lazy">
-            </div>
-            {% endif %}
-        </div>
-
-        <!-- Threshold Analysis -->
-        {% if results.threshold_analysis %}
-        <div class="threshold-section glass-card animate-fade-up">
-            <h3>Production Threshold Analysis</h3>
-            <p class="threshold-desc">Adjust the confidence threshold to balance precision and recall for your production line requirements.</p>
-            <div class="table-wrapper">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Threshold</th>
-                            <th>Precision</th>
-                            <th>Recall</th>
-                            <th>F1-Score</th>
-                            <th>Accuracy</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for row in results.threshold_analysis %}
-                        <tr class="{% if row.threshold == 0.5 %}row-highlight{% endif %}">
-                            <td><span class="threshold-badge">{{ row.threshold }}</span></td>
-                            <td>{{ (row.precision * 100)|round(1) }}%</td>
-                            <td>{{ (row.recall * 100)|round(1) }}%</td>
-                            <td>{{ (row.f1_score * 100)|round(1) }}%</td>
-                            <td>{{ (row.accuracy * 100)|round(1) }}%</td>
-                        </tr>
+            <div class="bar-chart" data-reveal>
+                {% for m in chart_data.metrics %}
+                <div class="bar-group">
+                    <div class="bar-cols">
+                        {% for model in chart_data.models %}
+                        {% set val = m['values'][loop.index0] %}
+                        <div class="bar-col {% if val is none %}is-missing{% endif %}" style="--m-colour: {{ model.colour }}">
+                            {% if val is not none %}
+                            <span class="bar-num">{{ (val * 100)|round(1) }}</span>
+                            <div class="bar-fill" style="--h: {{ (val * 100)|round(1) }}%" title="{{ model.label }} — {{ m.label }}: {{ (val * 100)|round(1) }}%"></div>
+                            {% else %}
+                            <span class="bar-num">—</span>
+                            <div class="bar-fill" style="--h: 2%" title="{{ model.label }} — {{ m.label }}: not evaluated"></div>
+                            {% endif %}
+                        </div>
                         {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            <p class="threshold-note">
-                💡 <strong>Tip:</strong> Lower thresholds catch more defects (higher recall) but may flag good products. 
-                Higher thresholds reduce false alarms but may miss subtle defects.
-            </p>
-        </div>
-        {% endif %}
-
-        <!-- Per-Defect-Type Breakdown -->
-        {% if results.defect_type_breakdown %}
-        <div class="breakdown-section glass-card animate-fade-up">
-            <h3>Recall by Defect Type</h3>
-            <p class="threshold-desc">Overall recall can hide a defect type the model rarely catches — this breaks it down per type on the test set.</p>
-            <div class="breakdown-grid">
-                {% for dtype, stats in results.defect_type_breakdown.items()|sort %}
-                <div class="breakdown-card">
-                    <h4>{{ dtype.replace('_', ' ') }}</h4>
-                    <div class="breakdown-value">{{ (stats.recall * 100)|round(1) }}%</div>
-                    <div class="breakdown-support">{{ stats.correct }}/{{ stats.support }} caught</div>
+                    </div>
+                    <div class="bar-label">{{ m.label }}</div>
                 </div>
                 {% endfor %}
             </div>
         </div>
-        {% endif %}
 
-        <!-- Confidence Calibration -->
-        {% if results.calibration %}
-        {% if results.calibration.version == 2 %}
-        <div class="calibration-note animate-fade-up">
-            <strong>Confidence calibration (ECE):</strong> {{ results.calibration.ece }}
-            {% if results.calibration.ece > 0.1 %}
-            — confidence values are likely overstated; run <code>python src/calibrate.py</code> to correct them.
-            {% else %}
-            — the displayed confidence percentages are reasonably well-calibrated.
-            {% endif %}
-        </div>
-        {% else %}
-        <div class="calibration-note animate-fade-up">
-            <strong>Confidence calibration (ECE):</strong> not shown — the saved figure was produced by an older,
-            incorrect formula. Re-run <code>python src/evaluate.py</code> to refresh it.
-        </div>
-        {% endif %}
-        {% endif %}
-
-        {% else %}
-        <!-- No Results State -->
-        <div class="empty-dashboard glass-card animate-fade-up">
-            <div class="empty-icon-large">📊</div>
-            <h3>No Evaluation Results Yet</h3>
-            <p>Train a model and run evaluation to see performance metrics here.</p>
-            <div class="empty-commands">
-                <div class="command-block">
-                    <code>python src/train.py</code>
-                    <span>Train the model</span>
-                </div>
-                <div class="command-block">
-                    <code>python src/evaluate.py --generate-gradcam</code>
-                    <span>Run evaluation</span>
-                </div>
-            </div>
-        </div>
-        {% endif %}
-
-        <!-- Model Comparison Table -->
-        <div class="threshold-section comparison-section glass-card animate-fade-up" style="margin-top: 30px;">
-            <h3>Architecture Comparison</h3>
-            <p class="threshold-desc">
-                The three supported architectures and whether a trained checkpoint is actually available on this server.
-                {% if results and results.architecture %}The evaluation metrics above belong to <strong>{{ results.architecture }}</strong> only.{% endif %}
-            </p>
+        <!-- Comparison table -->
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>Side-by-side details</h3>
+            <p class="threshold-desc">The three trained models compared row by row.</p>
             <div class="table-wrapper">
-                <table class="data-table">
+                <table class="data-table compare-table">
                     <thead>
-                        <tr>
-                            <th>Model</th>
-                            <th>Checkpoint</th>
-                            <th>Parameters</th>
-                            <th>Relative speed</th>
-                            <th>Notes</th>
-                        </tr>
+                        <tr><th></th>{% for v in views %}<th style="--m-colour: {{ v.colour }}"><a href="/dashboard/{{ v.slug }}" class="th-link"><span class="dash-dot"></span>{{ v.label }}</a></th>{% endfor %}</tr>
                     </thead>
+                    {% for sec in comparison.sections %}
                     <tbody>
-                        {% set arch_info = {
-                            'convnext_tiny': ['28.0M', 'Fast', 'Default model on this site.'],
-                            'efficientnet_b0': ['5.3M', 'Very fast', 'Smallest of the three; suited to edge devices.'],
-                            'resnet50': ['25.6M', 'Moderate', 'Classic convolutional baseline.']
-                        } %}
-                        {% for a in architectures %}
+                        <tr class="section-row"><td colspan="{{ views|length + 1 }}">{{ sec.title }}</td></tr>
+                        {% for row in sec.rows %}
                         <tr>
-                            <td><strong>{{ a.label }}</strong>{% if a.default %} <span class="pill">default</span>{% endif %}</td>
-                            <td>{% if a.available %}<span class="pill ok">trained checkpoint</span>{% else %}<span class="pill warn">not available</span>{% endif %}</td>
-                            <td>{{ arch_info[a.id][0] }}</td>
-                            <td>{{ arch_info[a.id][1] }}</td>
-                            <td>{{ arch_info[a.id][2] }}</td>
+                            <td class="row-label">{{ row.label }}{% if row.hint %}<small>{{ row.hint }}</small>{% endif %}</td>
+                            {% for c in row.cells %}<td class="{% if c.missing %}cell-missing{% endif %}">{{ c.text }}</td>{% endfor %}
                         </tr>
                         {% endfor %}
+                    </tbody>
+                    {% endfor %}
+                </table>
+            </div>
+        </div>
+
+        {% if chart_data.curves %}
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>Training curves</h3>
+            <p class="threshold-desc">Validation loss per epoch for every model. The marker shows the epoch whose weights were kept.</p>
+            <div class="curve-chart" data-curve-chart data-metric="val_loss" data-title="Validation loss"></div>
+        </div>
+        {% endif %}
+
+        {% if comparison.defect_rows %}
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>Recall by defect type</h3>
+            <p class="threshold-desc">How many defects of each kind every model caught on the test set (caught / total).</p>
+            <div class="table-wrapper">
+                <table class="data-table compare-table">
+                    <thead><tr><th>Defect type</th>{% for v in views %}<th>{{ v.label }}</th>{% endfor %}</tr></thead>
+                    <tbody>
+                    {% for row in comparison.defect_rows %}
+                        <tr><td class="row-label" style="text-transform: capitalize">{{ row.label }}</td>
+                        {% for c in row.cells %}<td class="{% if c.missing %}cell-missing{% endif %}">{{ c.text }}{% if c.detail %} <small class="inline-small">{{ c.detail }}</small>{% endif %}</td>{% endfor %}</tr>
+                    {% endfor %}
                     </tbody>
                 </table>
             </div>
         </div>
+        {% endif %}
+
+        {% if comparison.threshold_rows %}
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>F1-score by decision threshold</h3>
+            <p class="threshold-desc">Moving the confidence threshold trades missed defects against false alarms; this shows how each model reacts.</p>
+            <div class="table-wrapper">
+                <table class="data-table compare-table">
+                    <thead><tr><th>Threshold</th>{% for v in views %}<th>{{ v.label }}</th>{% endfor %}</tr></thead>
+                    <tbody>
+                    {% for row in comparison.threshold_rows %}
+                        <tr class="{% if row.threshold == 0.5 %}row-highlight{% endif %}"><td><span class="threshold-badge">{{ row.threshold }}</span></td>
+                        {% for c in row.cells %}<td class="{% if c.missing %}cell-missing{% endif %}">{{ c.text }}</td>{% endfor %}</tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
     </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script id="chartData" type="application/json">{{ chart_data|tojson }}</script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

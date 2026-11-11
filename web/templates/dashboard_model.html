@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% from "_dash_macros.html" import circle, subnav, not_evaluated %}
+{% block title %}{{ view.label }} — Dashboard — Transistor Defect Detector{% endblock %}
+
+{% block content %}
+{% set d = view.details %}
+{% set val = view.vals %}
+<section class="dashboard-section model-page" style="--m-colour: {{ view.colour }}">
+    <div class="container">
+        <div class="section-header animate-fade-up">
+            <span class="section-tag">Model details</span>
+            <h1 class="section-title">{{ view.label }}</h1>
+            <p class="section-subtitle">{{ d.tagline }}.</p>
+            <div class="tool-row" style="justify-content:center; margin-top:14px;">
+                {% if view.is_default %}<span class="pill ok">default model</span>{% endif %}
+                {% if view.checkpoint_available %}<span class="pill ok">trained checkpoint</span>{% else %}<span class="pill warn">no checkpoint on this server</span>{% endif %}
+                {% for b in view.badges %}<span class="pill ok">{{ b }}</span>{% endfor %}
+                {% for b in view.neutral_badges %}<span class="pill ok">{{ b }}</span>{% endfor %}
+            </div>
+        </div>
+
+        {{ subnav(views, view.arch) }}
+
+        {% if not view.has_results %}{{ not_evaluated(view.label, view.arch) }}{% endif %}
+
+        <!-- Headline metrics -->
+        <div class="metrics-grid animate-fade-up">
+            {% if view.has_results %}
+                {{ circle(val.accuracy, 'Accuracy', 'Test set · overall correct', 'metric-circle-blue') }}
+                {{ circle(val.precision, 'Precision', 'Flagged defects that are real', 'metric-circle-purple') }}
+                {{ circle(val.recall, 'Recall', 'Real defects that were caught', 'metric-circle-cyan') }}
+                {{ circle(val.f1_score, 'F1-Score', 'Balance of P &amp; R'|safe, 'metric-circle-green') }}
+            {% elif val.val_acc is not none %}
+                {{ circle(val.val_acc, 'Validation accuracy', 'At the saved epoch', 'metric-circle-blue') }}
+            {% endif %}
+        </div>
+        {% if view.has_results and view.results.evaluated_at %}
+        <p class="eval-timestamp animate-fade-up">Evaluated {{ view.results.evaluated_at.split('T')[0] }} · {{ val.test_samples }} test images{% if view.results.test_class_counts %} ({{ view.results.test_class_counts.good }} good, {{ view.results.test_class_counts.defective }} defective){% endif %}</p>
+        {% endif %}
+
+        <!-- About + facts -->
+        <div class="detail-grid animate-fade-up">
+            <div class="glass-card dash-panel">
+                <h3>About the architecture</h3>
+                <p class="detail-text">{{ d.summary }}</p>
+                <ul class="detail-list">{% for item in d.how %}<li>{{ item }}</li>{% endfor %}</ul>
+                <p class="tool-note" style="margin-top:14px">{{ d.origin }}</p>
+            </div>
+            <div class="glass-card dash-panel">
+                <h3>Model facts</h3>
+                <dl class="facts">
+                    <div><dt>Family</dt><dd>{{ d.family }}</dd></div>
+                    <div><dt>Parameters</dt><dd>{% if val.parameters_m %}{{ '%.2f'|format(val.parameters_m) }} M{% else %}—{% endif %}</dd></div>
+                    <div><dt>Checkpoint size</dt><dd>{% if val.size_mb %}{{ val.size_mb }} MB{% if view.weights_dtype == 'float16' %} <small>(half-precision)</small>{% endif %}{% else %}—{% endif %}</dd></div>
+                    <div><dt>Compute</dt><dd>{{ d.gflops }} GFLOPs / image</dd></div>
+                    <div><dt>Pretrained on</dt><dd>{{ d.pretrained }}</dd></div>
+                    <div><dt>ImageNet top-1</dt><dd>{{ d.imagenet_top1 }}%</dd></div>
+                    <div><dt>Classifier head</dt><dd>{{ d.head }}</dd></div>
+                    <div><dt>Grad-CAM layer</dt><dd>{{ d.gradcam_layer }}</dd></div>
+                </dl>
+            </div>
+        </div>
+
+        <!-- Training -->
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>Training</h3>
+            <div class="stat-tiles">
+                <div class="stat-tile"><span>{{ val.best_epoch or '—' }}</span><small>Best epoch (saved)</small></div>
+                <div class="stat-tile"><span>{{ val.epochs_run or '—' }}</span><small>Epochs run</small></div>
+                <div class="stat-tile"><span>{{ val.max_epochs }}</span><small>Epoch budget</small></div>
+                <div class="stat-tile"><span>{% if val.val_acc is not none %}{{ (val.val_acc * 100)|round(1) }}%{% else %}—{% endif %}</span><small>Validation accuracy</small></div>
+                <div class="stat-tile"><span>{% if val.val_loss is not none %}{{ '%.3f'|format(val.val_loss) }}{% else %}—{% endif %}</span><small>Validation loss</small></div>
+                {% if val.train_minutes %}<div class="stat-tile"><span>{{ '%.1f'|format(val.train_minutes) }} min</span><small>Training time</small></div>{% endif %}
+            </div>
+            {% if val.stop_reason %}<p class="detail-text">Training ended by: <strong>{{ val.stop_reason|lower }}</strong>.</p>
+            {% elif view.history_mismatch %}<p class="tool-note">The total number of epochs run is not shown: the training log found next to this checkpoint (<code>last_{{ view.arch }}.pth</code>) comes from a different run than the saved best checkpoint (epoch {{ val.best_epoch }}). Fill it from the real training log with <code>python scripts/import_training_log.py {{ view.arch }}</code>.</p>
+            {% elif val.best_epoch %}<p class="tool-note">The saved checkpoint is the epoch with the lowest validation loss (epoch {{ val.best_epoch }} of a {{ val.max_epochs }}-epoch budget). The total number of epochs run is recorded for new training runs, or by running <code>python scripts/export_model_info.py</code> when <code>last_{{ view.arch }}.pth</code> exists.</p>{% endif %}
+
+            <h4 class="sub-heading">Training recipe {% if view.recipe_is_run %}<span class="pill ok">recorded for this run</span>{% else %}<span class="pill">project defaults (configs/config.yaml)</span>{% endif %}</h4>
+            <dl class="facts facts-2col">
+                {% for label, value in view.recipe %}<div><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+            </dl>
+        </div>
+
+        {% if view.history %}
+        <div class="charts-grid animate-fade-up">
+            <div class="chart-card glass-card"><h3>Loss per epoch</h3><div class="curve-chart" data-curve-chart data-metrics="train_loss,val_loss"></div></div>
+            <div class="chart-card glass-card"><h3>Accuracy per epoch</h3><div class="curve-chart" data-curve-chart data-metrics="train_acc,val_acc" data-percent="1"></div></div>
+        </div>
+        {% endif %}
+
+        <!-- Rank among the models -->
+        <div class="glass-card dash-panel animate-fade-up">
+            <h3>How it ranks</h3>
+            <p class="threshold-desc">Position among the three models (1 = best; for parameters and compute, 1 = smallest).</p>
+            <div class="rank-grid">
+                {% for r in ranks %}
+                <div class="rank-card {% if r.rank == 1 %}is-first{% endif %}">
+                    <small>{{ r.label }}</small>
+                    <span class="rank-value">{{ r.text }}</span>
+                    {% if r.rank %}<span class="rank-pos">#{{ r.rank }} of {{ r.of }}</span>{% else %}<span class="rank-pos muted">not ranked</span>{% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        {% if view.has_results %}
+        <!-- Evaluation plots -->
+        {% set pl = view.plots %}
+        {% if pl %}
+        <div class="charts-grid animate-fade-up">
+            {% if pl.get('confusion_matrix') %}<div class="chart-card glass-card"><h3>Confusion Matrix</h3><img src="{{ pl.confusion_matrix }}" alt="Confusion matrix for {{ view.label }}" class="chart-image" loading="lazy"></div>{% endif %}
+            {% if pl.get('pr_curve') %}<div class="chart-card glass-card"><h3>Precision-Recall Curve</h3><img src="{{ pl.pr_curve }}" alt="Precision-recall curve for {{ view.label }}" class="chart-image" loading="lazy"></div>{% endif %}
+            {% if pl.get('roc_curve') %}<div class="chart-card glass-card"><h3>ROC Curve</h3><img src="{{ pl.roc_curve }}" alt="ROC curve for {{ view.label }}" class="chart-image" loading="lazy"></div>{% endif %}
+            {% if pl.get('training_history') %}<div class="chart-card glass-card"><h3>Training History</h3><img src="{{ pl.training_history }}" alt="Training history for {{ view.label }}" class="chart-image" loading="lazy"></div>{% endif %}
+        </div>
+        {% endif %}
+
+        {% set res = view.results %}
+        <div class="detail-grid animate-fade-up">
+            <div class="glass-card dash-panel">
+                <h3>More test metrics</h3>
+                <dl class="facts">
+                    <div><dt>ROC AUC</dt><dd>{{ (res.metrics.roc_auc * 100)|round(1) }}%</dd></div>
+                    <div><dt>Average precision</dt><dd>{{ (res.metrics.avg_precision * 100)|round(1) }}%</dd></div>
+                    {% if val.ece is not none %}<div><dt>Calibration error (ECE)</dt><dd>{{ '%.3f'|format(val.ece) }}</dd></div>{% endif %}
+                    {% if val.ms_per_image %}<div><dt>Speed (this machine)</dt><dd>{{ val.ms_per_image }} ms / image</dd></div>{% endif %}
+                    {% if view.calibration %}<div><dt>Temperature scaling</dt><dd>T = {{ '%.2f'|format(view.calibration.temperature) }} · ECE {{ '%.3f'|format(view.calibration.ece_before) }} → {{ '%.3f'|format(view.calibration.ece_after) }}</dd></div>{% endif %}
+                </dl>
+            </div>
+            {% if res.defect_type_breakdown %}
+            <div class="glass-card dash-panel">
+                <h3>Recall by defect type</h3>
+                <div class="breakdown-grid">
+                    {% for dtype, stats in res.defect_type_breakdown.items()|sort %}
+                    <div class="breakdown-card"><h4>{{ dtype.replace('_', ' ') }}</h4><div class="breakdown-value">{{ (stats.recall * 100)|round(1) }}%</div><div class="breakdown-support">{{ stats.correct }}/{{ stats.support }} caught</div></div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if res.threshold_analysis %}
+        <div class="threshold-section glass-card animate-fade-up">
+            <h3>Production Threshold Analysis</h3>
+            <p class="threshold-desc">Adjust the confidence threshold to balance precision and recall for your production line requirements.</p>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead><tr><th>Threshold</th><th>Precision</th><th>Recall</th><th>F1-Score</th><th>Accuracy</th></tr></thead>
+                    <tbody>
+                    {% for row in res.threshold_analysis %}
+                        <tr class="{% if row.threshold == 0.5 %}row-highlight{% endif %}"><td><span class="threshold-badge">{{ row.threshold }}</span></td>
+                        <td>{{ (row.precision * 100)|round(1) }}%</td><td>{{ (row.recall * 100)|round(1) }}%</td><td>{{ (row.f1_score * 100)|round(1) }}%</td><td>{{ (row.accuracy * 100)|round(1) }}%</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        {% endif %}
+
+        <!-- Strengths / trade-offs -->
+        <div class="detail-grid animate-fade-up">
+            <div class="glass-card dash-panel pro-card"><h3>Strengths</h3><ul class="detail-list">{% for t in d.strengths %}<li>{{ t }}</li>{% endfor %}</ul></div>
+            <div class="glass-card dash-panel con-card"><h3>Trade-offs</h3><ul class="detail-list">{% for t in d.tradeoffs %}<li>{{ t }}</li>{% endfor %}</ul></div>
+        </div>
+
+        <!-- Prev / next -->
+        <div class="model-pager animate-fade-up">
+            {% if prev_view %}<a href="/dashboard/{{ prev_view.slug }}" class="pager-link glass-card" style="--m-colour: {{ prev_view.colour }}">← {{ prev_view.label }}</a>{% else %}<span></span>{% endif %}
+            <a href="/dashboard" class="pager-link glass-card">Back to comparison</a>
+            {% if next_view %}<a href="/dashboard/{{ next_view.slug }}" class="pager-link glass-card" style="--m-colour: {{ next_view.colour }}">{{ next_view.label }} →</a>{% else %}<span></span>{% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{% if view.history %}
+<script id="chartData" type="application/json">{{ {"curves": [{"id": view.arch, "label": view.label, "colour": view.colour, "history": view.history, "best_epoch": view.vals.best_epoch}]}|tojson }}</script>
+{% endif %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

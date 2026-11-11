@@ -1,0 +1,164 @@
+{
+  "architecture": "resnet50",
+  "metrics": {
+    "accuracy": 0.6470588235294118,
+    "precision": 0.23333333333333334,
+    "recall": 0.875,
+    "f1_score": 0.3684210526315789,
+    "roc_auc": 0.8375,
+    "avg_precision": 0.7042139554434637
+  },
+  "per_class_report": {
+    "Good": {
+      "precision": 0.9736842105263158,
+      "recall": 0.6166666666666667,
+      "f1-score": 0.7551020408163265,
+      "support": 60.0
+    },
+    "Defective": {
+      "precision": 0.23333333333333334,
+      "recall": 0.875,
+      "f1-score": 0.3684210526315789,
+      "support": 8.0
+    },
+    "accuracy": 0.6470588235294118,
+    "macro avg": {
+      "precision": 0.6035087719298246,
+      "recall": 0.7458333333333333,
+      "f1-score": 0.5617615467239527,
+      "support": 68.0
+    },
+    "weighted avg": {
+      "precision": 0.8865841073271414,
+      "recall": 0.6470588235294118,
+      "f1-score": 0.7096101598534149,
+      "support": 68.0
+    }
+  },
+  "defect_type_breakdown": {
+    "bent_lead": {
+      "support": 3,
+      "correct": 2,
+      "recall": 0.6667
+    },
+    "cut_lead": {
+      "support": 2,
+      "correct": 2,
+      "recall": 1.0
+    },
+    "damaged_case": {
+      "support": 1,
+      "correct": 1,
+      "recall": 1.0
+    },
+    "misplaced": {
+      "support": 2,
+      "correct": 2,
+      "recall": 1.0
+    }
+  },
+  "calibration": {
+    "ece": 0.0711,
+    "bins": [
+      {
+        "range": "0.5-0.6",
+        "count": 31,
+        "avg_confidence": 0.5436,
+        "avg_accuracy": 0.5161
+      },
+      {
+        "range": "0.6-0.7",
+        "count": 15,
+        "avg_confidence": 0.6466,
+        "avg_accuracy": 0.5333
+      },
+      {
+        "range": "0.7-0.8",
+        "count": 11,
+        "avg_confidence": 0.7457,
+        "avg_accuracy": 0.9091
+      },
+      {
+        "range": "0.8-0.9",
+        "count": 7,
+        "avg_confidence": 0.836,
+        "avg_accuracy": 0.8571
+      },
+      {
+        "range": "0.9-1.0",
+        "count": 4,
+        "avg_confidence": 0.9157,
+        "avg_accuracy": 1.0
+      }
+    ],
+    "version": 2
+  },
+  "threshold_analysis": [
+    {
+      "threshold": 0.3,
+      "precision": 0.1346,
+      "recall": 0.875,
+      "f1_score": 0.2333,
+      "accuracy": 0.3235
+    },
+    {
+      "threshold": 0.4,
+      "precision": 0.1556,
+      "recall": 0.875,
+      "f1_score": 0.2642,
+      "accuracy": 0.4265
+    },
+    {
+      "threshold": 0.5,
+      "precision": 0.2333,
+      "recall": 0.875,
+      "f1_score": 0.3684,
+      "accuracy": 0.6471
+    },
+    {
+      "threshold": 0.6,
+      "precision": 0.4286,
+      "recall": 0.75,
+      "f1_score": 0.5455,
+      "accuracy": 0.8529
+    },
+    {
+      "threshold": 0.7,
+      "precision": 0.8333,
+      "recall": 0.625,
+      "f1_score": 0.7143,
+      "accuracy": 0.9412
+    },
+    {
+      "threshold": 0.8,
+      "precision": 1.0,
+      "recall": 0.25,
+      "f1_score": 0.4,
+      "accuracy": 0.9118
+    },
+    {
+      "threshold": 0.9,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0,
+      "accuracy": 0.8824
+    },
+    {
+      "threshold": 0.95,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0,
+      "accuracy": 0.8824
+    }
+  ],
+  "checkpoint": "outputs\\checkpoints\\best_resnet50.pth",
+  "checkpoint_epoch": 7,
+  "evaluated_at": "2026-11-05T06:36:06.066380+00:00",
+  "num_test_samples": 68,
+  "ms_per_image": 243.1,
+  "eval_device": "cpu",
+  "test_class_counts": {
+    "good": 60,
+    "defective": 8
+  }
+}

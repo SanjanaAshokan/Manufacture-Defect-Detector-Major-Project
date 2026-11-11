@@ -218,6 +218,37 @@ def _protruding_lead_vote(dist: np.ndarray, spread: float, body: np.ndarray,
             "cone": cone, "opposite": opposite}
 
 
+def _fit_smooth_background(lab: np.ndarray, b: int):
+    """
+    Fit a quadratic surface (per LAB channel) to the picture's border strips. Returns
+    (background_field, spread) where spread is the median residual of the border pixels, or
+    (None, inf) when it cannot be fitted.
+    """
+    height, width = lab.shape[:2]
+    mask = np.zeros((height, width), bool)
+    mask[:b], mask[-b:], mask[:, :b], mask[:, -b:] = True, True, True, True
+    ys, xs = np.nonzero(mask)
+    if len(xs) < 50:
+        return None, float("inf")
+
+    def design(x, y):
+        x = x / float(max(width - 1, 1)) - 0.5
+        y = y / float(max(height - 1, 1)) - 0.5
+        return np.stack([np.ones_like(x), x, y, x * y, x * x, y * y], axis=1)
+
+    a = design(xs.astype(np.float32), ys.astype(np.float32))
+    grid_y, grid_x = np.mgrid[0:height, 0:width]
+    full = design(grid_x.ravel().astype(np.float32), grid_y.ravel().astype(np.float32))
+    field = np.empty((height, width, 3), np.float32)
+    resid = []
+    for c in range(3):
+        coef, *_ = np.linalg.lstsq(a, lab[ys, xs, c], rcond=None)
+        field[..., c] = (full @ coef).reshape(height, width)
+        resid.append(np.abs(a @ coef - lab[ys, xs, c]))
+    spread = float(np.median(np.sqrt(sum(r * r for r in resid))))
+    return field, spread
+
+
 def _detect_generic(small: np.ndarray) -> Dict:
     """
     Detector 2: background-agnostic. Everything that differs from the photo's border
@@ -232,9 +263,15 @@ def _detect_generic(small: np.ndarray) -> Dict:
                              lab[:, :b].reshape(-1, 3), lab[:, -b:].reshape(-1, 3)])
     bg = np.median(border, axis=0)
     spread = float(np.median(np.linalg.norm(border - bg, axis=1)))
+    bg_field = None
     if spread > _GENERIC_MAX_BG_SPREAD:
-        return _none("background too busy for the contrast detector")
-    dist = np.linalg.norm(lab - bg, axis=2)
+        # Product photos often sit on a soft gradient / vignette, which a single border colour
+        # reads as "busy". Model the backdrop as a smooth surface fitted to the border pixels;
+        # genuinely busy scenes (wood, clutter) still do not fit and are given up on as before.
+        bg_field, spread = _fit_smooth_background(lab, b)
+        if bg_field is None or spread > _GENERIC_MAX_BG_SPREAD:
+            return _none("background too busy for the contrast detector")
+    dist = np.linalg.norm(lab - (bg if bg_field is None else bg_field), axis=2)
     dmax = max(float(dist.max()), 1.0)
     d8 = np.clip(dist * 255.0 / dmax, 0, 255).astype(np.uint8)
     otsu, _ = cv2.threshold(d8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -318,7 +355,75 @@ def _detect_generic(small: np.ndarray) -> Dict:
     word = _compass(alpha)
     return {"direction": word, "angle_deg": round(alpha, 1), "confidence": round(float(confidence), 3),
             "reason": f"leads point {word}", "body_box": body_box, "lead_box": lead_box,
-            "bg_rgb": bg_rgb, "method": "contrast", "lead_evidence": True}
+            "bg_rgb": bg_rgb, "method": "contrast", "lead_evidence": True,
+            **({"assisted": ["gradient background"]} if bg_field is not None else {})}
+
+
+
+# --------------------------------------------------------------------------------------
+# Robustness helpers for real-world photos (stock-photo footers, letterbox bars, captions)
+# --------------------------------------------------------------------------------------
+_BAND_MIN_STEP = 60.0        # mean-luminance difference (0-255) between an edge band and the picture
+_BAND_MIN_JUMP = 0.7         # ... and the row-to-row jump at the band's inner edge, as a share of that difference
+_BAND_MIN_FRACTION = 0.01    # a band must be at least 1% of that image dimension ...
+_BAND_MAX_FRACTION = 0.30    # ... and at most 30% (anything bigger is the picture itself)
+
+
+def _edge_band_length(profile: np.ndarray) -> int:
+    """
+    `profile` is the mean luminance of every row (or column) of the picture. Returns how many
+    rows/columns at the START of the profile form a uniform band that is much darker or
+    brighter than the picture's middle (0 when there is none).
+    """
+    n = len(profile)
+    if n < 40:
+        return 0
+    inner = float(np.median(profile[int(0.3 * n):int(0.7 * n) + 1]))
+    edge = float(np.median(profile[:2]))
+    step = abs(edge - inner)
+    if step < _BAND_MIN_STEP:
+        return 0
+    tol = 0.5 * step
+    limit = int(_BAND_MAX_FRACTION * n)
+    length = 0
+    while length < limit and abs(float(profile[length]) - edge) < tol:
+        length += 1
+    if not (length >= max(3, int(_BAND_MIN_FRACTION * n)) and length < limit):
+        return 0
+    # A real bar ends abruptly. A part entering the frame changes the row average gradually,
+    # which must not be mistaken for a bar around a white margin.
+    jump = abs(float(np.mean(profile[length:length + 3])) - float(np.mean(profile[length - 3:length])))
+    return length if jump >= _BAND_MIN_JUMP * step else 0
+
+
+def content_box(rgb: np.ndarray):
+    """
+    Find the picture inside uniform bars along its edges (stock-photo footer strips, letterbox
+    bars, dark captions). Returns (x0, y0, x1, y1) of the content, or None when the image
+    has no such bars - in which case nothing downstream changes at all.
+    """
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    h, w = gray.shape
+    rows, cols = gray.mean(axis=1), gray.mean(axis=0)
+    top = _edge_band_length(rows)
+    bottom = _edge_band_length(rows[::-1])
+    left = _edge_band_length(cols)
+    right = _edge_band_length(cols[::-1])
+    if not (top or bottom or left or right):
+        return None
+    pad = 2   # drop the anti-aliased seam between bar and picture
+    return (left + (pad if left else 0), top + (pad if top else 0),
+            w - right - (pad if right else 0), h - bottom - (pad if bottom else 0))
+
+
+def _scale_boxes(found: Dict, x0: int, y0: int, cw: int, ch: int, w: int, h: int) -> Dict:
+    """Map normalised boxes measured inside a sub-image back to the whole picture."""
+    for key in ("body_box", "lead_box"):
+        box = found.get(key)
+        if box:
+            found[key] = [round((x0 + box[0] * cw) / w, 4), round((y0 + box[1] * ch) / h, 4),
+                          round((x0 + box[2] * cw) / w, 4), round((y0 + box[3] * ch) / h, 4)]
+    return found
 
 
 def detect_lead_direction(image: Image.Image) -> Dict:
@@ -333,6 +438,24 @@ def detect_lead_direction(image: Image.Image) -> Dict:
         body_box / lead_box : normalised [x0, y0, x1, y1] in the ORIGINAL image
     """
     rgb = np.array(image.convert("RGB"))
+    box = content_box(rgb)
+    if box is not None:
+        x0, y0, x1, y1 = box
+        if (x1 - x0) >= 32 and (y1 - y0) >= 32:
+            # Bars along the edge (e.g. a dark stock-photo footer) otherwise get mistaken for
+            # the transistor body, or make the background look "busy". Analyse the picture
+            # inside the bars and map the boxes back; fall back to the whole image only if
+            # that finds nothing.
+            found = _detect_on_rgb(rgb[y0:y1, x0:x1])
+            if found.get("direction") is not None or found.get("body_box") is not None:
+                found["content_box"] = [round(x0 / rgb.shape[1], 4), round(y0 / rgb.shape[0], 4),
+                                        round(x1 / rgb.shape[1], 4), round(y1 / rgb.shape[0], 4)]
+                found["assisted"] = list(found.get("assisted", [])) + ["border bars trimmed"]
+                return _scale_boxes(found, x0, y0, x1 - x0, y1 - y0, rgb.shape[1], rgb.shape[0])
+    return _detect_on_rgb(rgb)
+
+
+def _detect_on_rgb(rgb: np.ndarray) -> Dict:
     small = _analysis_view(rgb)
     height, width = small.shape[:2]
     if min(height, width) < 32:
@@ -354,6 +477,8 @@ def detect_lead_direction(image: Image.Image) -> Dict:
     # Direction stays None, so no rotation is ever applied because of this.
     if second.get("lead_evidence") and first.get("body_box") is not None:
         first["lead_evidence"] = True
+        if second.get("assisted"):
+            first["assisted"] = second["assisted"]
         if first.get("lead_box") is None and second.get("lead_box") is not None:
             first["lead_box"] = second["lead_box"]
     return first
@@ -388,6 +513,9 @@ def auto_orient(image: Image.Image, min_confidence: float = _MIN_CONFIDENCE) -> 
         "body_box": found.get("body_box"),   # normalised [x0, y0, x1, y1] in the ORIGINAL image
         "lead_box": found.get("lead_box"),
         "lead_evidence": bool(found.get("lead_evidence", found.get("lead_box") is not None)),
+        # which relaxations (trimmed bars, gradient backdrop) were needed to find the geometry;
+        # the "is this a transistor?" gate asks for a little extra similarity in that case
+        "assisted": list(found.get("assisted", [])),
     }
     if direction is None or found["confidence"] < min_confidence:
         if direction not in (None, "down"):
@@ -417,3 +545,34 @@ def auto_orient(image: Image.Image, min_confidence: float = _MIN_CONFIDENCE) -> 
         how = f"tilted; rotated {applied} deg (counter-clockwise) to upright"
     info.update(applied=True, rotation_deg=applied, reason=f"leads pointed {direction}; {how}")
     return rotated, info
+
+
+def centre_crop(image: Image.Image, fraction: float):
+    """Central `fraction` of the picture and its pixel offset (x0, y0)."""
+    w, h = image.size
+    cw, ch = max(1, int(round(w * fraction))), max(1, int(round(h * fraction)))
+    x0, y0 = (w - cw) // 2, (h - ch) // 2
+    return image.crop((x0, y0, x0 + cw, y0 + ch)), x0, y0
+
+
+def find_transistor_geometry(image: Image.Image, views=(0.6,)) -> Dict:
+    """
+    Rescue search for the live camera, used when the whole-frame geometry check found nothing.
+    The part is meant to be held in the guide box in the middle, so re-run the check on a
+    tighter central crop: that discards the busy desk / hand / room around it.
+
+    Returns {"ok": bool, "method": str|None, "body_box": [...]|None, "lead_box": [...]|None}
+    with boxes normalised to the WHOLE picture. Nothing here ever rotates the image.
+    """
+    W, H = image.size
+    for fraction in views:
+        crop, x0, y0 = centre_crop(image, fraction)
+        cw, ch = crop.size
+        if min(cw, ch) < 48:
+            continue
+        found = detect_lead_direction(crop)
+        if found.get("body_box") is not None and (found.get("lead_box") is not None or found.get("lead_evidence")):
+            found = _scale_boxes(dict(found), x0, y0, cw, ch, W, H)
+            return {"ok": True, "method": f"centre {int(fraction * 100)}% crop",
+                    "body_box": found["body_box"], "lead_box": found.get("lead_box")}
+    return {"ok": False, "method": None, "body_box": None, "lead_box": None}

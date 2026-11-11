@@ -153,8 +153,10 @@
   ],
   "checkpoint": "outputs\\checkpoints\\best_convnext_tiny.pth",
   "checkpoint_epoch": 17,
-  "evaluated_at": "2026-10-25T03:20:58.458312+00:00",
+  "evaluated_at": "2026-11-05T06:37:16.238056+00:00",
   "num_test_samples": 68,
+  "ms_per_image": 170.2,
+  "eval_device": "cpu",
   "test_class_counts": {
     "good": 60,
     "defective": 8
