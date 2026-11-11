@@ -47,6 +47,9 @@
                         <span>Hold transistor still to scan...</span>
                     </div>
 
+                    <!-- Guide box: the server re-checks this central area when the whole frame is busy -->
+                    <div id="guideBox" class="scan-guide-box" aria-hidden="true"><span>Place the transistor here</span></div>
+
                     <div id="cameraSetup" style="position: absolute; text-align: center; padding: 20px;">
                         <button class="btn btn-primary" id="startCameraBtn">Start Camera</button>
                     </div>
@@ -192,6 +195,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const scanningStatus = document.getElementById('scanningStatus');
     const rtOodWarn = document.getElementById('rtOodWarn');
     const rtOodInfo = document.getElementById('rtOodInfo');
+    const guideBox = document.getElementById('guideBox');
 
     let stream = null;
     let busy = false;              // a request to the server is in flight
@@ -256,6 +260,7 @@ document.addEventListener("DOMContentLoaded", () => {
             stopCameraBtn.style.display = 'block';
             fpsCounter.style.display = 'block';
             scanningStatus.style.display = 'block';
+            if (guideBox) guideBox.style.display = 'flex';
             
             resultsEmpty.style.display = 'none';
             // We do not show resultsContent immediately; wait until captured.
@@ -286,6 +291,7 @@ document.addEventListener("DOMContentLoaded", () => {
         stopCameraBtn.style.display = 'none';
         fpsCounter.style.display = 'none';
         scanningStatus.style.display = 'none';
+        if (guideBox) guideBox.style.display = 'none';
         overlayImage.style.display = 'none';
     }
 

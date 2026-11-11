@@ -12,6 +12,8 @@ Usage:
 import os
 import sys
 import json
+import time
+import shutil
 import argparse
 from pathlib import Path
 from datetime import datetime, timezone
@@ -338,7 +340,9 @@ def main():
     print("EVALUATION")
     print("=" * 60)
 
+    eval_started = time.perf_counter()
     results = evaluate_model(model, dataloaders["test"], device)
+    eval_seconds = time.perf_counter() - eval_started
     metrics = compute_metrics(results["labels"], results["preds"], results["probs"])
 
     # Print metrics
@@ -379,9 +383,24 @@ def main():
     plot_precision_recall_curve(results["labels"], results["probs"], str(plots_dir / "pr_curve.png"))
     plot_roc_curve(results["labels"], results["probs"], str(plots_dir / "roc_curve.png"))
 
-    # Training history (if available in checkpoint)
-    if "history" in checkpoint:
-        plot_training_history(checkpoint["history"], str(plots_dir / "training_history.png"))
+    # Training history: stored in last_<arch>.pth (the best checkpoint only holds the weights)
+    history = checkpoint.get("history")
+    if not history:
+        last_path = Path(checkpoint_path.replace("best_", "last_", 1))
+        if last_path.exists():
+            try:
+                history = torch.load(str(last_path), map_location="cpu", weights_only=False).get("history")
+            except Exception:
+                history = None
+    if history:
+        plot_training_history(history, str(plots_dir / "training_history.png"))
+
+    # Keep a copy per architecture: the Dashboard compares all models side by side, and the
+    # un-suffixed files above are overwritten by whichever model was evaluated last.
+    for stem in ("confusion_matrix", "pr_curve", "roc_curve", "training_history"):
+        src_png = plots_dir / f"{stem}.png"
+        if src_png.exists() and (stem != "training_history" or history):
+            shutil.copyfile(src_png, plots_dir / f"{stem}_{architecture}.png")
 
     # ---- Threshold Analysis ----
     thresholds = config["evaluation"]["thresholds"]
@@ -413,6 +432,10 @@ def main():
         # instead of letting a website display a stale run forever.
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "num_test_samples": int(len(results["labels"])),
+        # Average wall-clock time per test image on THIS machine (includes image loading and
+        # preprocessing). Only comparable between models evaluated on the same machine.
+        "ms_per_image": round(1000.0 * eval_seconds / max(len(results["labels"]), 1), 1),
+        "eval_device": str(device),
         "test_class_counts": {
             "good": int((results["labels"] == 0).sum()),
             "defective": int((results["labels"] == 1).sum()),
@@ -423,6 +446,10 @@ def main():
     with open(results_path, "w") as f:
         json.dump(results_data, f, indent=2)
     print(f"\n[Results] Saved to {results_path}")
+    per_model_path = plots_dir / f"evaluation_results_{architecture}.json"
+    with open(per_model_path, "w") as f:
+        json.dump(results_data, f, indent=2)
+    print(f"[Results] Saved to {per_model_path}")
 
     # ---- Grad-CAM Samples ----
     if args.generate_gradcam:

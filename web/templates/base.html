@@ -44,7 +44,15 @@
                         <li><a href="/line" class="{% if request.endpoint == 'line_page' %}active{% endif %}">Line Simulator<small>Live yield &amp; control chart</small></a></li>
                     </ul>
                 </li>
-                <li><a href="/dashboard" class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+                <li class="nav-dropdown nav-dropdown-hover" id="dashboardDropdown">
+                    <a href="/dashboard" class="nav-link {% if request.endpoint in ['dashboard', 'dashboard_model'] %}active{% endif %}" aria-haspopup="true">Dashboard ▾</a>
+                    <ul class="nav-dropdown-menu">
+                        <li><a href="/dashboard" class="{% if request.endpoint == 'dashboard' %}active{% endif %}">Model Comparison<small>All three models side by side</small></a></li>
+                        <li><a href="/dashboard/convnext-tiny" class="{% if request.view_args and request.view_args.get('slug') == 'convnext-tiny' %}active{% endif %}">ConvNeXt-Tiny<small>Default model</small></a></li>
+                        <li><a href="/dashboard/efficientnet-b0" class="{% if request.view_args and request.view_args.get('slug') == 'efficientnet-b0' %}active{% endif %}">EfficientNet-B0<small>Smallest and fastest</small></a></li>
+                        <li><a href="/dashboard/resnet-50" class="{% if request.view_args and request.view_args.get('slug') == 'resnet-50' %}active{% endif %}">ResNet-50<small>Classic residual baseline</small></a></li>
+                    </ul>
+                </li>
                 <li><a href="/about" class="nav-link {% if request.endpoint == 'about' %}active{% endif %}">About</a></li>
                 <li><button class="theme-toggle" id="themeToggle" aria-label="Toggle theme"><span class="theme-toggle-icon"></span></button></li>
             </ul>
@@ -100,7 +108,10 @@
                         <a href="/detect">Detect Defects</a>
                         <a href="/batch">Batch Inspection</a>
                         <a href="/compare">Model Consensus</a>
-                        <a href="/dashboard">View Metrics</a>
+                        <a href="/dashboard">Model Comparison</a>
+                        <a href="/dashboard/convnext-tiny">ConvNeXt-Tiny</a>
+                        <a href="/dashboard/efficientnet-b0">EfficientNet-B0</a>
+                        <a href="/dashboard/resnet-50">ResNet-50</a>
                         <a href="/about">Learn More</a>
                     </div>
                     <div class="footer-col">

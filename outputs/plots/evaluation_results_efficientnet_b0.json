@@ -1,0 +1,164 @@
+{
+  "architecture": "efficientnet_b0",
+  "metrics": {
+    "accuracy": 0.6029411764705882,
+    "precision": 0.22857142857142856,
+    "recall": 1.0,
+    "f1_score": 0.37209302325581395,
+    "roc_auc": 0.9270833333333334,
+    "avg_precision": 0.6989583333333333
+  },
+  "per_class_report": {
+    "Good": {
+      "precision": 1.0,
+      "recall": 0.55,
+      "f1-score": 0.7096774193548387,
+      "support": 60.0
+    },
+    "Defective": {
+      "precision": 0.22857142857142856,
+      "recall": 1.0,
+      "f1-score": 0.37209302325581395,
+      "support": 8.0
+    },
+    "accuracy": 0.6029411764705882,
+    "macro avg": {
+      "precision": 0.6142857142857143,
+      "recall": 0.775,
+      "f1-score": 0.5408852213053263,
+      "support": 68.0
+    },
+    "weighted avg": {
+      "precision": 0.9092436974789916,
+      "recall": 0.6029411764705882,
+      "f1-score": 0.6699616080490711,
+      "support": 68.0
+    }
+  },
+  "defect_type_breakdown": {
+    "bent_lead": {
+      "support": 3,
+      "correct": 3,
+      "recall": 1.0
+    },
+    "cut_lead": {
+      "support": 2,
+      "correct": 2,
+      "recall": 1.0
+    },
+    "damaged_case": {
+      "support": 1,
+      "correct": 1,
+      "recall": 1.0
+    },
+    "misplaced": {
+      "support": 2,
+      "correct": 2,
+      "recall": 1.0
+    }
+  },
+  "calibration": {
+    "ece": 0.1419,
+    "bins": [
+      {
+        "range": "0.5-0.6",
+        "count": 18,
+        "avg_confidence": 0.5452,
+        "avg_accuracy": 0.3889
+      },
+      {
+        "range": "0.6-0.7",
+        "count": 17,
+        "avg_confidence": 0.6516,
+        "avg_accuracy": 0.4706
+      },
+      {
+        "range": "0.7-0.8",
+        "count": 19,
+        "avg_confidence": 0.7376,
+        "avg_accuracy": 0.6316
+      },
+      {
+        "range": "0.8-0.9",
+        "count": 11,
+        "avg_confidence": 0.8625,
+        "avg_accuracy": 1.0
+      },
+      {
+        "range": "0.9-1.0",
+        "count": 3,
+        "avg_confidence": 0.9232,
+        "avg_accuracy": 1.0
+      }
+    ],
+    "version": 2
+  },
+  "threshold_analysis": [
+    {
+      "threshold": 0.3,
+      "precision": 0.1667,
+      "recall": 1.0,
+      "f1_score": 0.2857,
+      "accuracy": 0.4118
+    },
+    {
+      "threshold": 0.4,
+      "precision": 0.1905,
+      "recall": 1.0,
+      "f1_score": 0.32,
+      "accuracy": 0.5
+    },
+    {
+      "threshold": 0.5,
+      "precision": 0.2286,
+      "recall": 1.0,
+      "f1_score": 0.3721,
+      "accuracy": 0.6029
+    },
+    {
+      "threshold": 0.6,
+      "precision": 0.3333,
+      "recall": 1.0,
+      "f1_score": 0.5,
+      "accuracy": 0.7647
+    },
+    {
+      "threshold": 0.7,
+      "precision": 0.4615,
+      "recall": 0.75,
+      "f1_score": 0.5714,
+      "accuracy": 0.8676
+    },
+    {
+      "threshold": 0.8,
+      "precision": 1.0,
+      "recall": 0.375,
+      "f1_score": 0.5455,
+      "accuracy": 0.9265
+    },
+    {
+      "threshold": 0.9,
+      "precision": 1.0,
+      "recall": 0.125,
+      "f1_score": 0.2222,
+      "accuracy": 0.8971
+    },
+    {
+      "threshold": 0.95,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0,
+      "accuracy": 0.8824
+    }
+  ],
+  "checkpoint": "outputs\\checkpoints\\best_efficientnet_b0.pth",
+  "checkpoint_epoch": 26,
+  "evaluated_at": "2026-11-05T06:34:51.795744+00:00",
+  "num_test_samples": 68,
+  "ms_per_image": 91.0,
+  "eval_device": "cpu",
+  "test_class_counts": {
+    "good": 60,
+    "defective": 8
+  }
+}

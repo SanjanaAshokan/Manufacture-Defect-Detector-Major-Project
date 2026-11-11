@@ -1,0 +1,32 @@
+{# Shared bits for the Dashboard pages #}
+{% macro circle(value, label, desc, cls) %}
+<div class="metric-card glass-card">
+    <div class="metric-circle {{ cls }}">
+        <svg viewBox="0 0 36 36" class="circular-chart">
+            <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+            <path class="circle-fill" stroke-dasharray="{{ (value * 100)|round(1) }}, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"/>
+        </svg>
+        <span class="metric-value">{{ (value * 100)|round(1) }}%</span>
+    </div>
+    <h3>{{ label }}</h3>
+    <p>{{ desc }}</p>
+</div>
+{% endmacro %}
+
+{% macro subnav(views, active) %}
+<nav class="dash-subnav animate-fade-up" aria-label="Dashboard sections">
+    <a href="/dashboard" class="dash-tab {% if active == 'overview' %}active{% endif %}">Comparison</a>
+    {% for v in views %}
+    <a href="/dashboard/{{ v.slug }}" class="dash-tab {% if active == v.arch %}active{% endif %}" style="--m-colour: {{ v.colour }}">
+        <span class="dash-dot"></span>{{ v.label }}
+    </a>
+    {% endfor %}
+</nav>
+{% endmacro %}
+
+{% macro not_evaluated(label, arch) %}
+<div class="dash-notice glass-card animate-fade-up">
+    <strong>{{ label }} has no held-out test results yet.</strong>
+    Run <code>python src/evaluate.py --architecture {{ arch }}</code> (or <code>scripts/evaluate_all</code> for every model) and reload this page.
+</div>
+{% endmacro %}
